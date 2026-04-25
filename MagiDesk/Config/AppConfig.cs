@@ -50,6 +50,12 @@ public sealed class AppConfig
     /// proportional to where the user grabbed it).
     /// </summary>
     public bool    ZonesRestoreOnDrag  { get; set; } = true;
+    /// <summary>Distance (physical pixels) from a zone edge within which the
+    /// hover snap target expands to span 2 (along an edge) or 4 (at a corner)
+    /// adjacent zones, when those zones form a clean rectangle. 0 disables
+    /// the merge behavior. 14 is roughly a fingertip-width cushion at 100%
+    /// scaling.</summary>
+    public int     ZonesMergeBand      { get; set; } = 14;
     /// <summary>
     /// User-drawn custom layout as fractions of the work area. When set
     /// (non-null, non-empty), overrides the rows/cols grid.

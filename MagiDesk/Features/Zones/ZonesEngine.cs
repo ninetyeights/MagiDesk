@@ -28,7 +28,7 @@ internal sealed class ZonesEngine : IDisposable
     private IntPtr _dragHwnd;
     private RECT   _dragStartRect;
     private POINT  _dragStartCursor;
-    private (ZoneOverlayWindow overlay, Zone zone)? _currentHover;
+    private (ZoneOverlayWindow overlay, ZoneSelection selection)? _currentHover;
     private bool _overlaysShown;
 
     // Pending restore: captured at DragStart but actually applied on first
@@ -276,8 +276,9 @@ internal sealed class ZonesEngine : IDisposable
             {
                 Log($"ZONES Skip preSnap save — rect already matches a zone size");
             }
-            Log($"ZONES Snap → zone {hit.zone.Index} [{hit.zone.Bounds.Left},{hit.zone.Bounds.Top} {hit.zone.Bounds.Width}x{hit.zone.Bounds.Height}]");
-            SnapService.SnapTo(_dragHwnd, hit.zone.Bounds);
+            var sel = hit.selection;
+            Log($"ZONES Snap → {sel.Zones.Count} zone(s) [{string.Join(",", sel.Zones.Select(z => z.Index))}] merged=[{sel.MergedBounds.Left},{sel.MergedBounds.Top} {sel.MergedBounds.Width}x{sel.MergedBounds.Height}]");
+            SnapService.SnapTo(_dragHwnd, sel.MergedBounds);
         }
         HideOverlays();
         _currentHover = null;
@@ -303,17 +304,18 @@ internal sealed class ZonesEngine : IDisposable
         if (!_overlaysShown) ShowOverlays();
 
         GetCursorPos(out var cur);
-        // Find monitor containing cursor.
+        // Find monitor containing cursor + run merge-aware hit test.
         ZoneOverlayWindow? activeOverlay = null;
-        Zone? activeZone = null;
+        ZoneSelection? activeSelection = null;
+        int mergeBand = Math.Max(0, AppConfig.Current.ZonesMergeBand);
         foreach (var ov in _overlays)
         {
             var (slot, layout) = _byOverlay[ov];
             if (cur.X >= slot.WorkArea.Left && cur.X < slot.WorkArea.Right &&
                 cur.Y >= slot.WorkArea.Top  && cur.Y < slot.WorkArea.Bottom)
             {
-                activeOverlay = ov;
-                activeZone    = layout.HitTest(cur.X, cur.Y);
+                activeOverlay   = ov;
+                activeSelection = layout.HitTestWithMerge(cur.X, cur.Y, mergeBand);
                 break;
             }
         }
@@ -321,10 +323,10 @@ internal sealed class ZonesEngine : IDisposable
         foreach (var ov in _overlays)
             if (ov != activeOverlay) ov.ClearHighlight();
 
-        if (activeOverlay is not null && activeZone is not null)
+        if (activeOverlay is not null && activeSelection is not null)
         {
-            activeOverlay.Highlight(activeZone.Index);
-            _currentHover = (activeOverlay, activeZone);
+            activeOverlay.Highlight(activeSelection.Zones.Select(z => z.Index).ToList());
+            _currentHover = (activeOverlay, activeSelection);
         }
         else
         {

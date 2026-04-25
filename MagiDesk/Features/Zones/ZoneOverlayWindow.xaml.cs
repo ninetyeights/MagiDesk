@@ -11,7 +11,7 @@ namespace MagiDesk.Features.Zones;
 public partial class ZoneOverlayWindow : Window
 {
     private readonly Dictionary<int, Rectangle> _rects = new();
-    private int _highlightedIndex = -1;
+    private readonly HashSet<int> _highlightedIndices = new();
 
     // Brushes are rebuilt per-LoadLayout from the current system accent color
     // so the overlay tracks the user's personalization choice. Stored as
@@ -138,26 +138,41 @@ public partial class ZoneOverlayWindow : Window
             if (w < 70 || h < 70) sizeText.Visibility = Visibility.Collapsed;
             ZoneCanvas.Children.Add(panel);
         }
-        _highlightedIndex = -1;
+        _highlightedIndices.Clear();
     }
 
-    public void Highlight(int zoneIndex)
+    /// <summary>Highlight the union of <paramref name="zoneIndices"/> as the
+    /// active drop target. Diff against <see cref="_highlightedIndices"/> so
+    /// only the actually-changed rectangles repaint — needed because
+    /// PollTick fires at 30 Hz while the user holds Shift.</summary>
+    public void Highlight(IReadOnlyCollection<int> zoneIndices)
     {
-        if (_highlightedIndex == zoneIndex) return;
-        if (_highlightedIndex >= 0 && _rects.TryGetValue(_highlightedIndex, out var prev))
+        // Clear stale highlights.
+        foreach (var idx in _highlightedIndices)
         {
-            prev.Fill   = _idleFill;
-            prev.Stroke = _idleStroke;
+            if (zoneIndices.Contains(idx)) continue;
+            if (_rects.TryGetValue(idx, out var prev))
+            {
+                prev.Fill   = _idleFill;
+                prev.Stroke = _idleStroke;
+            }
         }
-        if (zoneIndex >= 0 && _rects.TryGetValue(zoneIndex, out var cur))
+        // Apply new highlights.
+        foreach (var idx in zoneIndices)
         {
-            cur.Fill   = _activeFill;
-            cur.Stroke = _activeStroke;
+            if (_rects.TryGetValue(idx, out var cur))
+            {
+                cur.Fill   = _activeFill;
+                cur.Stroke = _activeStroke;
+            }
         }
-        _highlightedIndex = zoneIndex;
+        _highlightedIndices.Clear();
+        foreach (var idx in zoneIndices) _highlightedIndices.Add(idx);
     }
 
-    public void ClearHighlight() => Highlight(-1);
+    public void Highlight(int zoneIndex) => Highlight(new[] { zoneIndex });
+
+    public void ClearHighlight() => Highlight(Array.Empty<int>());
 
     private void RebuildBrushes()
     {
