@@ -1,0 +1,45 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <!-- WinForms just for NotifyIcon / ContextMenuStrip in the tray service. -->
+    <UseWindowsForms>true</UseWindowsForms>
+
+    <!-- Keep WH_MOUSE_LL callback under LowLevelHooksTimeout (~300ms).
+         Server GC = parallel, shorter pauses; SustainedLowLatency set at
+         runtime prevents Gen2 blocking collections during drag. -->
+    <ServerGarbageCollection>true</ServerGarbageCollection>
+    <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
+    <TieredCompilation>true</TieredCompilation>
+    <TieredPGO>true</TieredPGO>
+
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="MagiDesk.Tests" />
+    <!-- UseWindowsForms=true adds System.Drawing and System.Windows.Forms to
+         ImplicitUsings globally, which collides with System.Windows.Media.Brush
+         and System.Windows.Shapes.Rectangle in every WPF file. Strip those so
+         the only WinForms use site (TrayService.cs) uses fully-qualified names. -->
+    <Using Remove="System.Drawing" />
+    <Using Remove="System.Windows.Forms" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="WPF-UI" Version="4.2.0" />
+    <!-- WMI for reading chrome.exe command lines. -->
+    <PackageReference Include="System.Management" Version="9.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- UI Automation for reading Chrome's toolbar profile button. -->
+    <Reference Include="UIAutomationClient" />
+    <Reference Include="UIAutomationTypes" />
+  </ItemGroup>
+
+</Project>

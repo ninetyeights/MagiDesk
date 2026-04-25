@@ -1,0 +1,246 @@
+<Page x:Class="MagiDesk.Pages.BrowserBadgesPage"
+      xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+      xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+      xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+      Title="浏览器 Profile 徽标"
+      x:Name="PageRoot">
+    <ScrollViewer Background="Transparent"
+                  MaxHeight="{Binding ActualHeight, ElementName=PageRoot}"
+                  VerticalScrollBarVisibility="Auto"
+                  HorizontalScrollBarVisibility="Disabled"
+                  Padding="0">
+        <Grid Margin="16,16,20,16">
+            <StackPanel HorizontalAlignment="Stretch" MaxWidth="1100">
+                <TextBlock Text="浏览器 Profile 徽标" FontSize="28" FontWeight="SemiBold"/>
+                <TextBlock Text="每个 Chrome profile 的窗口右上角浮一个胶囊，显示头像和 profile 名字，方便区分多窗口。每个 profile 可单独设颜色、自定义头像和开关。"
+                           Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                           TextWrapping="Wrap"
+                           Margin="0,2,0,20"/>
+
+                <ui:InfoBar HorizontalAlignment="Stretch"
+                            IsOpen="True"
+                            IsClosable="False"
+                            Severity="Informational"
+                            Title="关于窗口层级"
+                            Message="启用徽标或 MagiDesk 启动时，已打开的 Chrome 窗口会被一起前置，最终顺序不固定（Windows 的 owner 机制所致）。"
+                            Margin="0,0,0,12"/>
+
+                <!-- Enable -->
+                <ui:Card HorizontalAlignment="Stretch" Padding="18,16" Margin="0,0,0,12">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                            <TextBlock Text="启用徽标" FontWeight="SemiBold"/>
+                            <TextBlock Text="每 3 秒扫描一次 Chrome 窗口，新开窗口会延迟出现徽标。"
+                                       FontSize="12"
+                                       Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                       Margin="0,2,0,0"/>
+                        </StackPanel>
+                        <ui:ToggleSwitch x:Name="TsEnabled" Grid.Column="1"
+                                         VerticalAlignment="Center"
+                                         Checked="Enabled_Changed" Unchecked="Enabled_Changed"/>
+                    </Grid>
+                </ui:Card>
+
+                <StackPanel x:Name="BodyGroup">
+
+                <!-- Size -->
+                <ui:Card HorizontalAlignment="Stretch" Padding="18,16" Margin="0,0,0,12">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="260"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,16,0">
+                            <TextBlock Text="徽标尺寸" FontWeight="SemiBold"/>
+                            <TextBlock Text="胶囊高度 (px)，宽度按内容自适应"
+                                       FontSize="12"
+                                       Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                       Margin="0,2,0,0"/>
+                        </StackPanel>
+                        <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                            <Slider x:Name="SizeSlider" Width="180" Minimum="20" Maximum="64"
+                                    IsSnapToTickEnabled="True" TickFrequency="2"
+                                    ValueChanged="Size_Changed"/>
+                            <TextBlock x:Name="TxtSize" Margin="10,0,0,0" VerticalAlignment="Center" Width="40"/>
+                        </StackPanel>
+                    </Grid>
+                </ui:Card>
+
+                <!-- Show name -->
+                <ui:Card HorizontalAlignment="Stretch" Padding="18,16" Margin="0,0,0,12">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                            <TextBlock Text="显示 Profile 名称" FontWeight="SemiBold"/>
+                            <TextBlock Text="关闭后徽标只显示头像，胶囊会收缩到头像大小。"
+                                       FontSize="12"
+                                       Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                       Margin="0,2,0,0"/>
+                        </StackPanel>
+                        <ui:ToggleSwitch x:Name="TsShowName" Grid.Column="1"
+                                         VerticalAlignment="Center"
+                                         Checked="ShowName_Changed" Unchecked="ShowName_Changed"/>
+                    </Grid>
+                </ui:Card>
+
+                <!-- First word only -->
+                <ui:Card HorizontalAlignment="Stretch" Padding="18,16" Margin="0,0,0,12">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                            <TextBlock Text="仅显示首个单词" FontWeight="SemiBold"/>
+                            <TextBlock Text="开启时 &quot;N808 Carlos Ribeiro&quot; 只显示 &quot;N808&quot;，避免长名字撑爆徽标。"
+                                       FontSize="12"
+                                       Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                       TextWrapping="Wrap"
+                                       Margin="0,2,8,0"/>
+                        </StackPanel>
+                        <ui:ToggleSwitch x:Name="TsFirstWord" Grid.Column="1"
+                                         VerticalAlignment="Center"
+                                         Checked="FirstWord_Changed" Unchecked="FirstWord_Changed"/>
+                    </Grid>
+                </ui:Card>
+
+                <!-- Profile dock (taskbar-like launcher) -->
+                <ui:Card HorizontalAlignment="Stretch" Padding="18,16" Margin="0,0,0,12">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                            <TextBlock Text="启用 Profile Dock" FontWeight="SemiBold"/>
+                            <TextBlock Text="桌面上悬浮一条按钮，每个 Chrome profile 一个头像；点击启动或切换到该 profile 的窗口。"
+                                       FontSize="12"
+                                       Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                       TextWrapping="Wrap"
+                                       Margin="0,2,8,0"/>
+                        </StackPanel>
+                        <ui:ToggleSwitch x:Name="TsDock" Grid.Column="1"
+                                         VerticalAlignment="Center"
+                                         Checked="Dock_Changed" Unchecked="Dock_Changed"/>
+                    </Grid>
+                </ui:Card>
+
+                <!-- Position (drag to customize) -->
+                <ui:Card HorizontalAlignment="Stretch" Padding="18,16" Margin="0,0,0,12">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                            <TextBlock Text="解锁拖动" FontWeight="SemiBold"/>
+                            <TextBlock Text="开启后徽标变成可拖动（鼠标穿透关闭），拖到喜欢的位置后自动保存，对所有 profile 生效。"
+                                       FontSize="12"
+                                       Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                       TextWrapping="Wrap"
+                                       Margin="0,2,8,0"/>
+                        </StackPanel>
+                        <ui:Button x:Name="BtnResetPos" Grid.Column="1"
+                                   Content="重置位置"
+                                   Padding="12,6"
+                                   Margin="0,0,10,0"
+                                   VerticalAlignment="Center"
+                                   Click="ResetPos_Click"/>
+                        <ui:ToggleSwitch x:Name="TsUnlocked" Grid.Column="2"
+                                         VerticalAlignment="Center"
+                                         Checked="Unlocked_Changed" Unchecked="Unlocked_Changed"/>
+                    </Grid>
+                </ui:Card>
+
+                <!-- Dock groups -->
+                <ui:Card HorizontalAlignment="Stretch" Padding="18,16" Margin="0,0,0,12">
+                    <StackPanel>
+                        <Grid Margin="0,0,0,10">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0">
+                                <TextBlock Text="Dock 分组" FontWeight="SemiBold"/>
+                                <TextBlock Text="把几个 profile 归到一组，dock 上相邻组之间用指定样式分隔。"
+                                           FontSize="12"
+                                           Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                           TextWrapping="Wrap"
+                                           Margin="0,2,0,0"/>
+                            </StackPanel>
+                            <ui:Button Grid.Column="1" Content="新建分组" Padding="12,6"
+                                       VerticalAlignment="Center"
+                                       Click="NewGroup_Click"/>
+                        </Grid>
+
+                        <!-- Separator style + hide-ungrouped -->
+                        <Grid Margin="0,0,0,10">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="200"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="分隔样式"
+                                       VerticalAlignment="Center"
+                                       Margin="0,0,10,0"/>
+                            <ComboBox Grid.Column="1" x:Name="CmbSeparator"
+                                      Height="32"
+                                      VerticalContentAlignment="Center"
+                                      SelectionChanged="Separator_Changed">
+                                <ComboBoxItem Content="空隙"/>
+                                <ComboBoxItem Content="竖线"/>
+                                <ComboBoxItem Content="组名标签"/>
+                                <ComboBoxItem Content="半透边框"/>
+                            </ComboBox>
+                            <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center">
+                                <TextBlock Text="隐藏未分组"
+                                           VerticalAlignment="Center"
+                                           Margin="0,0,8,0"/>
+                                <ui:ToggleSwitch x:Name="TsHideUngrouped"
+                                                 VerticalAlignment="Center"
+                                                 Checked="HideUngrouped_Changed"
+                                                 Unchecked="HideUngrouped_Changed"/>
+                            </StackPanel>
+                        </Grid>
+
+                        <StackPanel x:Name="GroupsList"/>
+                    </StackPanel>
+                </ui:Card>
+
+                <!-- Profiles list -->
+                <ui:Card HorizontalAlignment="Stretch" Padding="18,16" Margin="0,0,0,12">
+                    <StackPanel>
+                        <Grid Margin="0,0,0,10">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="检测到的 Profile" FontWeight="SemiBold"
+                                       VerticalAlignment="Center"/>
+                            <ui:Button Grid.Column="1" Content="刷新" Padding="12,4"
+                                       Click="Refresh_Click"/>
+                        </Grid>
+                        <StackPanel x:Name="ProfileList"/>
+                        <TextBlock x:Name="TxtEmpty"
+                                   Text="没找到 Chrome profile。请确认 Chrome 已安装并至少启动过一次。"
+                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                   FontSize="12"
+                                   Margin="0,8,0,0"
+                                   Visibility="Collapsed"/>
+                    </StackPanel>
+                </ui:Card>
+
+                </StackPanel>
+            </StackPanel>
+        </Grid>
+    </ScrollViewer>
+</Page>

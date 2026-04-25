@@ -1,0 +1,55 @@
+# Visual Studio / .NET
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+[Ll]ogs/
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+[Ww][Ii][Nn]32/
+[Aa][Rr][Mm]/
+[Aa][Rr][Mm]64/
+
+# Visual Studio cache / settings / metadata
+.vs/
+*.suo
+*.user
+*.userprefs
+*.cache
+*.pidb
+*.dbmdl
+*.jfm
+*.svclog
+*.psess
+*.vsp
+*.vspx
+
+# Build / publish output
+*.dll
+*.exe
+*.pdb
+*.deps.json
+*.runtimeconfig.json
+publish/
+[Pp]ublishProfiles/
+
+# JetBrains Rider
+.idea/
+
+# NuGet
+*.nupkg
+*.snupkg
+.nuget/
+packages/
+!packages/build/
+
+# Test results
+[Tt]est[Rr]esult*/
+[Bb]uild[Ll]og.*
+
+# Misc
+*.log
+*.tmp
+Thumbs.db
+.DS_Store

@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="MagiDesk/MagiDesk.csproj" />
+  <Project Path="MagiDesk.Tests/MagiDesk.Tests.csproj" />
+</Solution>

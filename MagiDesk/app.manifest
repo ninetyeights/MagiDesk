@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<assembly manifestVersion="1.0" xmlns="urn:schemas-microsoft-com:asm.v1">
+  <assemblyIdentity version="1.0.0.0" name="MagiDesk.app"/>
+
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <!-- Per-Monitor V2: cursor coords from WH_MOUSE_LL, GetWindowRect and
+           SetWindowPos all live in physical-pixel screen space regardless of
+           which monitor the target window is on. Without this, the process
+           inherits System DPI awareness bound to the primary monitor's scale,
+           and dragging a window on a 4K monitor from a 1080p primary (or vice
+           versa) computes coordinates in a virtualized space that doesn't
+           match what the target window's thread expects. -->
+      <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">PerMonitorV2</dpiAwareness>
+      <dpiAware xmlns="http://schemas.microsoft.com/SMI/2005/WindowsSettings">True/PM</dpiAware>
+    </windowsSettings>
+  </application>
+</assembly>

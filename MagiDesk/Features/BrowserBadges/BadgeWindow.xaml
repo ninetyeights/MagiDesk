@@ -1,0 +1,53 @@
+<Window x:Class="MagiDesk.Features.BrowserBadges.BadgeWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Badge"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Background="Transparent"
+        ShowInTaskbar="False"
+        ShowActivated="False"
+        ResizeMode="NoResize"
+        Focusable="False"
+        SizeToContent="WidthAndHeight">
+    <Border x:Name="Pill"
+            CornerRadius="2"
+            Padding="8,4,12,4"
+            BorderThickness="1"
+            UseLayoutRounding="True"
+            SnapsToDevicePixels="True"
+            MouseLeftButtonDown="Pill_MouseDown"
+            MouseMove="Pill_MouseMove"
+            MouseLeftButtonUp="Pill_MouseUp"
+            Background="#0078D4">
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <Border x:Name="AvatarHost"
+                    Grid.Column="0"
+                    VerticalAlignment="Stretch"
+                    HorizontalAlignment="Left"
+                    Margin="0,0,8,0"
+                    Background="White"
+                    UseLayoutRounding="True"
+                    SnapsToDevicePixels="True"
+                    ClipToBounds="True">
+                <Grid>
+                    <Canvas x:Name="OverlayCanvas" IsHitTestVisible="False"/>
+                    <TextBlock x:Name="AvatarInitial"
+                               Foreground="White"
+                               FontWeight="SemiBold"
+                               HorizontalAlignment="Center"
+                               VerticalAlignment="Center"/>
+                </Grid>
+            </Border>
+            <TextBlock x:Name="NameText"
+                       Grid.Column="1"
+                       Foreground="White"
+                       FontWeight="SemiBold"
+                       VerticalAlignment="Center"/>
+        </Grid>
+    </Border>
+</Window>

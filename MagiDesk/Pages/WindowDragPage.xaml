@@ -1,0 +1,183 @@
+<Page x:Class="MagiDesk.Pages.WindowDragPage"
+      xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+      xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+      xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+      Title="窗口拖动">
+    <Page.Resources>
+        <!-- macOS-style modifier keycap: rounded square button with accent
+             border + subtle fill when checked. -->
+        <Style x:Key="KeyCap" TargetType="ToggleButton">
+            <Setter Property="Width"  Value="72"/>
+            <Setter Property="Height" Value="56"/>
+            <Setter Property="Margin" Value="0,0,10,0"/>
+            <Setter Property="Focusable" Value="False"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="Background" Value="{DynamicResource ControlFillColorDefaultBrush}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource CardStrokeColorDefaultBrush}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ToggleButton">
+                        <Border x:Name="Root"
+                                CornerRadius="10"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}">
+                            <TextBlock Text="{TemplateBinding Content}"
+                                       HorizontalAlignment="Center"
+                                       VerticalAlignment="Center"
+                                       Foreground="{TemplateBinding Foreground}"
+                                       FontSize="{TemplateBinding FontSize}"
+                                       FontWeight="{TemplateBinding FontWeight}"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="Root" Property="BorderBrush"
+                                        Value="{DynamicResource AccentFillColorDefaultBrush}"/>
+                                <Setter TargetName="Root" Property="BorderThickness" Value="2.5"/>
+                                <Setter Property="Foreground"
+                                        Value="{DynamicResource AccentTextFillColorPrimaryBrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Root" Property="Background"
+                                        Value="{DynamicResource ControlFillColorSecondaryBrush}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Page.Resources>
+
+    <ScrollViewer Background="Transparent"
+                  VerticalScrollBarVisibility="Auto"
+                  HorizontalScrollBarVisibility="Disabled"
+                  Padding="0">
+        <Grid Margin="16,16,20,16">
+            <StackPanel x:Name="RootPanel" HorizontalAlignment="Stretch" MaxWidth="1000">
+
+            <TextBlock Text="窗口拖动"
+                       FontSize="28" FontWeight="SemiBold"/>
+            <TextBlock Text="按住修饰键 + 鼠标拖动任意窗口。AltSnap 风格。"
+                       Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                       Margin="0,2,0,20"/>
+
+            <!-- Enable/disable -->
+            <ui:Card HorizontalAlignment="Stretch" Padding="18,16" Margin="0,0,0,12">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                        <TextBlock Text="启用窗口拖动" FontWeight="SemiBold"/>
+                        <TextBlock x:Name="TxtEnabledSub"
+                                   FontSize="12"
+                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                   Margin="0,2,0,0"/>
+                    </StackPanel>
+                    <ui:ToggleSwitch x:Name="TsEnabled"
+                                     Grid.Column="1"
+                                     VerticalAlignment="Center"
+                                     Checked="Enabled_Changed"
+                                     Unchecked="Enabled_Changed"/>
+                </Grid>
+            </ui:Card>
+
+            <!-- Settings group (dimmed when disabled) -->
+            <StackPanel x:Name="SettingsGroup">
+
+            <!-- Modifier keys (macOS-style keycap toggles) -->
+            <ui:Card HorizontalAlignment="Stretch" Padding="18,16" Margin="0,0,0,12">
+                <StackPanel>
+                    <TextBlock Text="修饰键"
+                               FontWeight="SemiBold"
+                               Margin="0,0,0,4"/>
+                    <TextBlock Text="按住这些键 + 对应鼠标键拖动窗口。可多选组合，至少选一个。"
+                               FontSize="12"
+                               Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                               Margin="0,0,0,14"/>
+
+                    <!-- Move keys row -->
+                    <Grid Margin="0,0,0,10">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="90"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="Move keys:" VerticalAlignment="Center"
+                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                        <StackPanel Grid.Column="1" Orientation="Horizontal">
+                            <ToggleButton x:Name="MoveCtrl" Style="{StaticResource KeyCap}" Content="Ctrl"
+                                          Checked="MoveKey_Changed" Unchecked="MoveKey_Changed"/>
+                            <ToggleButton x:Name="MoveAlt"  Style="{StaticResource KeyCap}" Content="Alt"
+                                          Checked="MoveKey_Changed" Unchecked="MoveKey_Changed"/>
+                            <ToggleButton x:Name="MoveWin"  Style="{StaticResource KeyCap}" Content="Win"
+                                          Checked="MoveKey_Changed" Unchecked="MoveKey_Changed"/>
+                        </StackPanel>
+                    </Grid>
+
+                    <!-- Resize keys row -->
+                    <Grid Margin="0,0,0,10">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="90"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="Resize keys:" VerticalAlignment="Center"
+                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                        <StackPanel Grid.Column="1" Orientation="Horizontal">
+                            <ToggleButton x:Name="ResizeCtrl" Style="{StaticResource KeyCap}" Content="Ctrl"
+                                          Checked="ResizeKey_Changed" Unchecked="ResizeKey_Changed"/>
+                            <ToggleButton x:Name="ResizeAlt"  Style="{StaticResource KeyCap}" Content="Alt"
+                                          Checked="ResizeKey_Changed" Unchecked="ResizeKey_Changed"/>
+                            <ToggleButton x:Name="ResizeWin"  Style="{StaticResource KeyCap}" Content="Win"
+                                          Checked="ResizeKey_Changed" Unchecked="ResizeKey_Changed"/>
+                        </StackPanel>
+                    </Grid>
+
+                    <StackPanel Margin="0,8,0,0">
+                        <ui:TextBlock x:Name="TxtMoveHint"
+                                      FontSize="13"
+                                      Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                      Margin="0,0,0,2"/>
+                        <ui:TextBlock x:Name="TxtResizeHint"
+                                      FontSize="13"
+                                      Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                    </StackPanel>
+                </StackPanel>
+            </ui:Card>
+
+            <!-- Resize mode -->
+            <ui:Card HorizontalAlignment="Stretch" Padding="18,16" Margin="0,0,0,12">
+                <StackPanel>
+                    <TextBlock Text="缩放方向识别"
+                               FontWeight="SemiBold"
+                               Margin="0,0,0,10"/>
+                    <RadioButton x:Name="Rb2x2"
+                                 GroupName="ResizeMode"
+                                 Content="2×2 四象限（只有角，点哪儿抓哪个角）"
+                                 Margin="0,4"
+                                 Checked="ResizeMode_Changed"/>
+                    <RadioButton x:Name="Rb3x3"
+                                 GroupName="ResizeMode"
+                                 Content="3×3 九宫格（角 + 边，中心默认右下角）"
+                                 Margin="0,4"
+                                 Checked="ResizeMode_Changed"/>
+                </StackPanel>
+            </ui:Card>
+
+            <ui:InfoBar HorizontalAlignment="Stretch"
+                        IsOpen="True"
+                        IsClosable="False"
+                        Severity="Informational"
+                        Title="设置会立即生效"
+                        Message="系统任务栏和桌面不会被拖动，不用重启应用。"
+                        Margin="0,4,0,0"/>
+
+            </StackPanel> <!-- /SettingsGroup -->
+            </StackPanel>
+        </Grid>
+    </ScrollViewer>
+</Page>

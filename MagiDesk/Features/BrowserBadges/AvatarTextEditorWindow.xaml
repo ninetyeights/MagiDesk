@@ -1,0 +1,191 @@
+<Window x:Class="MagiDesk.Features.BrowserBadges.AvatarTextEditorWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+        Title="编辑文字头像"
+        Width="420"
+        SizeToContent="Height"
+        WindowStartupLocation="CenterOwner"
+        ResizeMode="NoResize"
+        ShowInTaskbar="False">
+    <Grid Margin="20,16,20,16">
+        <StackPanel>
+            <TextBlock Text="编辑文字头像" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,4"/>
+            <TextBlock x:Name="TxtSubtitle"
+                       FontSize="12"
+                       Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                       Margin="0,0,0,16"/>
+
+            <!-- Preview -->
+            <Border x:Name="PreviewHost"
+                    Height="80"
+                    MinWidth="80"
+                    CornerRadius="40"
+                    HorizontalAlignment="Center"
+                    Margin="0,0,0,14"
+                    ClipToBounds="True"
+                    Background="#0078D4">
+                <Grid>
+                    <Canvas x:Name="PreviewOverlay" IsHitTestVisible="False"/>
+                    <TextBlock x:Name="PreviewText"
+                               Foreground="White"
+                               FontSize="34"
+                               FontWeight="SemiBold"
+                               HorizontalAlignment="Center"
+                               VerticalAlignment="Center"/>
+                </Grid>
+            </Border>
+
+            <!-- Shape -->
+            <Grid Margin="0,0,0,10">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="90"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0" Text="形状"
+                           VerticalAlignment="Center"/>
+                <ComboBox Grid.Column="1" x:Name="CmbShape"
+                          Height="32"
+                          VerticalContentAlignment="Center"
+                          SelectionChanged="Shape_Changed">
+                    <ComboBoxItem Content="圆形"/>
+                    <ComboBoxItem Content="矩形（圆角 2px）"/>
+                    <ComboBoxItem Content="方形（直角）"/>
+                    <ComboBoxItem Content="圆角方形"/>
+                    <ComboBoxItem Content="六边形"/>
+                    <ComboBoxItem Content="菱形"/>
+                    <ComboBoxItem Content="八边形"/>
+                </ComboBox>
+            </Grid>
+
+            <!-- Text input -->
+            <Grid Margin="0,0,0,10">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="90"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0" Text="文字"
+                           VerticalAlignment="Center"/>
+                <TextBox Grid.Column="1" x:Name="TxtInput"
+                         MaxLength="3"
+                         Height="32"
+                         VerticalContentAlignment="Center"
+                         TextChanged="Input_Changed"/>
+            </Grid>
+
+            <!-- Background style -->
+            <Grid Margin="0,0,0,10">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="90"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0" Text="样式"
+                           VerticalAlignment="Center"/>
+                <ComboBox Grid.Column="1" x:Name="CmbStyle"
+                          Height="32"
+                          VerticalContentAlignment="Center"
+                          SelectionChanged="Style_Changed">
+                    <ComboBoxItem Content="纯色"/>
+                    <ComboBoxItem Content="渐变 · 对角线"/>
+                    <ComboBoxItem Content="渐变 · 径向"/>
+                    <ComboBoxItem Content="渐变 · 水平"/>
+                    <ComboBoxItem Content="渐变 · 垂直"/>
+                </ComboBox>
+            </Grid>
+
+            <!-- Overlay shape -->
+            <Grid Margin="0,0,0,10">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="90"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0" Text="装饰"
+                           VerticalAlignment="Center"/>
+                <ComboBox Grid.Column="1" x:Name="CmbOverlay"
+                          Height="32"
+                          VerticalContentAlignment="Center"
+                          SelectionChanged="Style_Changed">
+                    <ComboBoxItem Content="无"/>
+                    <ComboBoxItem Content="圆点（右上角）"/>
+                    <ComboBoxItem Content="斜角条（右上角三角）"/>
+                    <ComboBoxItem Content="内描边"/>
+                    <ComboBoxItem Content="底部横条"/>
+                </ComboBox>
+            </Grid>
+
+            <!-- Background color (primary) -->
+            <Grid Margin="0,0,0,10">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="90"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0" Text="底色"
+                           VerticalAlignment="Center"/>
+                <TextBox Grid.Column="1" x:Name="TxtBgHex"
+                         Height="32"
+                         VerticalContentAlignment="Center"
+                         MaxLength="7"
+                         TextChanged="Input_Changed"/>
+                <Button Grid.Column="2" x:Name="BtnBgPick"
+                        Width="36" Height="32"
+                        Margin="6,0,0,0"
+                        Click="BgPick_Click"/>
+            </Grid>
+
+            <!-- Secondary color (only for gradient styles) -->
+            <Grid x:Name="Bg2Row" Margin="0,0,0,10">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="90"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0" Text="渐变色"
+                           VerticalAlignment="Center"/>
+                <TextBox Grid.Column="1" x:Name="TxtBgHex2"
+                         Height="32"
+                         VerticalContentAlignment="Center"
+                         MaxLength="7"
+                         TextChanged="Input_Changed"/>
+                <Button Grid.Column="2" x:Name="BtnBg2Pick"
+                        Width="36" Height="32"
+                        Margin="6,0,0,0"
+                        Click="Bg2Pick_Click"/>
+            </Grid>
+
+            <!-- Text color -->
+            <Grid Margin="0,0,0,16">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="90"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0" Text="文字颜色"
+                           VerticalAlignment="Center"/>
+                <TextBox Grid.Column="1" x:Name="TxtFgHex"
+                         Height="32"
+                         VerticalContentAlignment="Center"
+                         MaxLength="7"
+                         TextChanged="Input_Changed"/>
+                <Button Grid.Column="2" x:Name="BtnFgPick"
+                        Width="36" Height="32"
+                        Margin="6,0,0,0"
+                        Click="FgPick_Click"/>
+            </Grid>
+
+            <!-- Actions -->
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                <ui:Button Content="清除" Padding="16,6"
+                           Margin="0,0,8,0"
+                           Click="Clear_Click"/>
+                <ui:Button Content="取消" Padding="16,6"
+                           Margin="0,0,8,0"
+                           Click="Cancel_Click"/>
+                <ui:Button x:Name="BtnOk"
+                           Content="保存" Padding="16,6"
+                           Appearance="Primary"
+                           Click="Ok_Click"/>
+            </StackPanel>
+        </StackPanel>
+    </Grid>
+</Window>

@@ -1,0 +1,24 @@
+<Application x:Class="MagiDesk.App"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+             xmlns:local="clr-namespace:MagiDesk"
+             StartupUri="MainWindow.xaml">
+    <Application.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ui:ThemesDictionary Theme="Light"/>
+                <ui:ControlsDictionary/>
+            </ResourceDictionary.MergedDictionaries>
+
+            <!-- Kill the dotted focus rectangle that shows up on Alt-press
+                 / Tab navigation. Fluent design doesn't use these. -->
+            <Style TargetType="{x:Type Control}">
+                <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+            </Style>
+            <Style TargetType="{x:Type FrameworkElement}">
+                <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+            </Style>
+        </ResourceDictionary>
+    </Application.Resources>
+</Application>

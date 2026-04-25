@@ -1,0 +1,181 @@
+<Page x:Class="MagiDesk.Pages.QuickGridPage"
+      xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+      xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+      xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+      Title="快速网格"
+      x:Name="PageRoot">
+
+    <ScrollViewer Background="Transparent"
+                  MaxHeight="{Binding ActualHeight, ElementName=PageRoot}"
+                  VerticalScrollBarVisibility="Auto"
+                  HorizontalScrollBarVisibility="Disabled"
+                  Padding="0">
+        <Grid Margin="16,16,20,16">
+            <StackPanel HorizontalAlignment="Stretch" MaxWidth="1200">
+
+                <TextBlock Text="快速网格" FontSize="28" FontWeight="SemiBold"/>
+                <TextBlock Text="按快捷键弹出缩略图 → 拖动选格 → 活动窗口按选中格子的矩形对齐。"
+                           Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                           Margin="0,2,0,20"/>
+
+                <!-- Enable -->
+                <ui:Card HorizontalAlignment="Stretch" Padding="18,16" Margin="0,0,0,12">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                            <TextBlock Text="启用快速网格" FontWeight="SemiBold"/>
+                            <TextBlock Text="关闭后全局快捷键失效"
+                                       FontSize="12"
+                                       Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                       Margin="0,2,0,0"/>
+                        </StackPanel>
+                        <ui:ToggleSwitch x:Name="TsEnabled" Grid.Column="1"
+                                         VerticalAlignment="Center"
+                                         Checked="Enabled_Changed" Unchecked="Enabled_Changed"/>
+                    </Grid>
+                </ui:Card>
+
+                <StackPanel x:Name="BodyGroup">
+
+                <!-- Hotkey + reset -->
+                <ui:Card HorizontalAlignment="Stretch" Padding="18,16" Margin="0,0,0,12">
+                    <StackPanel>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                <TextBlock Text="快捷键" FontWeight="SemiBold"/>
+                                <TextBlock x:Name="TxtHotkeyHint"
+                                           FontSize="12"
+                                           Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                           Margin="0,2,0,0"/>
+                            </StackPanel>
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                <ui:Button x:Name="BtnRecord" MinWidth="180" Margin="0,0,8,0"
+                                           Content="点击录制快捷键" Click="BtnRecord_Click"/>
+                                <ui:Button x:Name="BtnResetHotkey" Content="重置" Padding="14,6"
+                                           Click="BtnResetHotkey_Click"/>
+                            </StackPanel>
+                        </Grid>
+                        <ui:InfoBar x:Name="HotkeyWarn"
+                                    Margin="0,10,0,0"
+                                    IsOpen="False"
+                                    IsClosable="False"
+                                    Severity="Warning"
+                                    Title="快捷键冲突"
+                                    Message="这个组合键被其他程序占用，当前未生效。换一个再试。"/>
+                    </StackPanel>
+                </ui:Card>
+
+                <!-- Restore on drag -->
+                <ui:Card HorizontalAlignment="Stretch" Padding="18,16" Margin="0,0,0,12">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,12,0">
+                            <TextBlock Text="拖拽恢复原始尺寸" FontWeight="SemiBold"/>
+                            <TextBlock Text="吸附后的窗口再次拖动时，仅恢复大小，位置跟随光标抓取点。"
+                                       FontSize="12"
+                                       Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                       TextWrapping="Wrap"
+                                       Margin="0,2,0,0"/>
+                        </StackPanel>
+                        <ui:ToggleSwitch x:Name="TsRestore" Grid.Column="1"
+                                         VerticalAlignment="Center"
+                                         Checked="Restore_Changed" Unchecked="Restore_Changed"/>
+                    </Grid>
+                </ui:Card>
+
+                <!-- Monitor mode -->
+                <ui:Card HorizontalAlignment="Stretch" Padding="18,16" Margin="0,0,0,12">
+                    <StackPanel>
+                        <TextBlock Text="显示器范围" FontWeight="SemiBold" Margin="0,0,0,10"/>
+                        <RadioButton x:Name="RbCurrent" GroupName="QgMode"
+                                     Content="仅当前窗口所在显示器"
+                                     Margin="0,4" Checked="Mode_Changed"/>
+                        <RadioButton x:Name="RbAll"     GroupName="QgMode"
+                                     Content="所有显示器（可跨屏搬窗）"
+                                     Margin="0,4" Checked="Mode_Changed"/>
+                    </StackPanel>
+                </ui:Card>
+
+                <!-- Per-monitor grid config (tabbed) -->
+                <ui:Card HorizontalAlignment="Stretch" Padding="18,16" Margin="0,0,0,12">
+                    <StackPanel>
+                        <TextBlock Text="按显示器配置" FontWeight="SemiBold" Margin="0,0,0,10"/>
+                        <TabControl x:Name="MonitorTabs"
+                                    Background="Transparent"
+                                    BorderThickness="0"
+                                    Padding="0,16,0,0">
+                            <TabControl.Resources>
+                                <!-- Win11/Fluent-style TabItem: selected row has
+                                     an accent pill underline, hover adds a
+                                     subtle fill, unselected stays text-only. -->
+                                <Style TargetType="TabItem">
+                                    <Setter Property="Padding" Value="14,8"/>
+                                    <Setter Property="Margin" Value="0,0,4,0"/>
+                                    <Setter Property="MinWidth" Value="140"/>
+                                    <Setter Property="Background" Value="Transparent"/>
+                                    <Setter Property="BorderThickness" Value="0"/>
+                                    <Setter Property="Foreground"
+                                            Value="{DynamicResource TextFillColorSecondaryBrush}"/>
+                                    <Setter Property="FontWeight" Value="SemiBold"/>
+                                    <Setter Property="FontSize" Value="13"/>
+                                    <Setter Property="HorizontalContentAlignment" Value="Center"/>
+                                    <Setter Property="VerticalContentAlignment" Value="Center"/>
+                                    <Setter Property="Template">
+                                        <Setter.Value>
+                                            <ControlTemplate TargetType="TabItem">
+                                                <Grid>
+                                                    <Border x:Name="PART_Bg"
+                                                            CornerRadius="6"
+                                                            Background="{TemplateBinding Background}"
+                                                            Margin="0,0,0,4"/>
+                                                    <ContentPresenter x:Name="PART_Content"
+                                                                      ContentSource="Header"
+                                                                      HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                                                      VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
+                                                                      Margin="{TemplateBinding Padding}"/>
+                                                    <Border x:Name="PART_Accent"
+                                                            VerticalAlignment="Bottom"
+                                                            HorizontalAlignment="Stretch"
+                                                            Height="3"
+                                                            Margin="14,0,14,0"
+                                                            CornerRadius="2"
+                                                            Background="{DynamicResource AccentFillColorDefaultBrush}"
+                                                            Visibility="Collapsed"/>
+                                                </Grid>
+                                                <ControlTemplate.Triggers>
+                                                    <Trigger Property="IsMouseOver" Value="True">
+                                                        <Setter TargetName="PART_Bg" Property="Background"
+                                                                Value="{DynamicResource SubtleFillColorSecondaryBrush}"/>
+                                                        <Setter Property="Foreground"
+                                                                Value="{DynamicResource TextFillColorPrimaryBrush}"/>
+                                                    </Trigger>
+                                                    <Trigger Property="IsSelected" Value="True">
+                                                        <Setter TargetName="PART_Accent" Property="Visibility" Value="Visible"/>
+                                                        <Setter Property="Foreground"
+                                                                Value="{DynamicResource TextFillColorPrimaryBrush}"/>
+                                                    </Trigger>
+                                                </ControlTemplate.Triggers>
+                                            </ControlTemplate>
+                                        </Setter.Value>
+                                    </Setter>
+                                </Style>
+                            </TabControl.Resources>
+                        </TabControl>
+                    </StackPanel>
+                </ui:Card>
+
+                </StackPanel>
+            </StackPanel>
+        </Grid>
+    </ScrollViewer>
+</Page>

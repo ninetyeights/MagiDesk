@@ -1,0 +1,25 @@
+<Window x:Class="MagiDesk.Features.ProfileDock.ProfileDockWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Profile Dock"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Background="Transparent"
+        ShowInTaskbar="False"
+        ShowActivated="False"
+        Topmost="True"
+        Focusable="False"
+        ResizeMode="NoResize"
+        SizeToContent="WidthAndHeight">
+    <Border x:Name="DockRoot"
+            CornerRadius="6"
+            BorderThickness="1"
+            BorderBrush="#40FFFFFF"
+            Background="#D0202020"
+            Padding="6"
+            MouseLeftButtonDown="Dock_MouseDown"
+            MouseMove="Dock_MouseMove"
+            MouseLeftButtonUp="Dock_MouseUp">
+        <StackPanel x:Name="ButtonPanel" Orientation="Horizontal"/>
+    </Border>
+</Window>

@@ -1,0 +1,68 @@
+<Window x:Class="MagiDesk.Features.Zones.ZoneEditorWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+        Title="Zone Editor"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Background="#99000000"
+        ShowInTaskbar="False"
+        Topmost="True"
+        ResizeMode="NoResize"
+        WindowStartupLocation="Manual">
+    <!-- Override the app-wide Light theme with Dark locally so WPF-UI buttons
+         render with Fluent dark surfaces that match the editor's dark chrome. -->
+    <Window.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ui:ThemesDictionary Theme="Dark"/>
+                <ui:ControlsDictionary/>
+            </ResourceDictionary.MergedDictionaries>
+        </ResourceDictionary>
+    </Window.Resources>
+    <Grid x:Name="Root" Focusable="True">
+        <Canvas x:Name="ZoneCanvas" Background="Transparent"
+                SizeChanged="ZoneCanvas_SizeChanged"
+                MouseMove="ZoneCanvas_MouseMove"
+                MouseLeftButtonDown="ZoneCanvas_MouseLeftButtonDown"
+                MouseLeftButtonUp="ZoneCanvas_MouseLeftButtonUp"
+                MouseRightButtonDown="ZoneCanvas_MouseRightButtonDown"
+                MouseLeave="ZoneCanvas_MouseLeave"/>
+
+        <Border VerticalAlignment="Top" HorizontalAlignment="Center"
+                Margin="0,24,0,0" Padding="20,14"
+                Background="#E6222222" CornerRadius="12">
+            <StackPanel Orientation="Horizontal">
+                <TextBlock Text="Zone 编辑器"
+                           Foreground="White" FontWeight="SemiBold"
+                           FontSize="14" VerticalAlignment="Center"
+                           Margin="0,0,20,0"/>
+                <ui:Button x:Name="BtnMerge"  Content="合并 (右键)" Padding="14,6"
+                           Margin="0,0,6,0"  Click="BtnMerge_Click"
+                           Appearance="Secondary"/>
+                <ui:Button x:Name="BtnEven"   Content="平均分配"    Padding="14,6"
+                           Margin="0,0,6,0"  Click="BtnEven_Click"
+                           Appearance="Secondary"/>
+                <ui:Button x:Name="BtnDelete" Content="删除 (Del)"  Padding="14,6"
+                           Margin="0,0,16,0" Click="BtnDelete_Click"
+                           Appearance="Secondary"/>
+                <ui:Button x:Name="BtnResetGrid" Content="重置为 2×2" Padding="14,6"
+                           Margin="0,0,8,0"  Click="BtnResetGrid_Click"
+                           Appearance="Secondary"/>
+                <ui:Button x:Name="BtnSave"   Content="保存 (Enter)" Padding="14,6"
+                           Margin="0,0,8,0"  Click="BtnSave_Click"
+                           Appearance="Primary"/>
+                <ui:Button x:Name="BtnCancel" Content="取消 (Esc)"  Padding="14,6"
+                           Click="BtnCancel_Click"
+                           Appearance="Secondary"/>
+            </StackPanel>
+        </Border>
+
+        <TextBlock VerticalAlignment="Bottom" HorizontalAlignment="Center"
+                   Margin="0,0,0,24" TextAlignment="Center" LineHeight="18"
+                   Foreground="#CCFFFFFF" FontSize="12">
+            悬停显示切割线（Shift 切换方向）· 点击切割 · 按下拖过多个 zone = 多选<LineBreak/>
+            右键合并（必须同父节点相邻）· Delete 删除 · 平均分配均分选中 · 拖动分隔条只影响其父节点
+        </TextBlock>
+    </Grid>
+</Window>
