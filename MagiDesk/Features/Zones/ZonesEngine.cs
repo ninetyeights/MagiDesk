@@ -242,20 +242,38 @@ internal sealed class ZonesEngine : IDisposable
         // window — otherwise the drag loop reverts the size back on mouseup.
         if (_pendingRestore is { } pr && !_overlaysShown && _currentHover is null)
         {
-            GetCursorPos(out var cur);
-            int dx = Math.Abs(cur.X - _dragStartCursor.X);
-            int dy = Math.Abs(cur.Y - _dragStartCursor.Y);
-            if (dx + dy >= 15)
+            // Distinguish move-drag (title bar) from resize (edge/corner). The
+            // OS fires MOVESIZESTART/END for both; we can only tell after the
+            // fact by comparing the snapped rect (at start) with the current
+            // rect. If the user resized, the pre-snap "original" we stashed
+            // is no longer their intended size — they just made a deliberate
+            // new choice. Drop the snap memory and skip restore so their new
+            // size sticks. ±20 px absorbs DWM invisible-frame compensation.
+            GetWindowRect(pr.hwnd, out var endRect);
+            bool sizeChanged = Math.Abs(endRect.Width  - pr.snapped.Width)  > 20
+                            || Math.Abs(endRect.Height - pr.snapped.Height) > 20;
+            if (sizeChanged)
             {
                 SnapMemory.Forget(pr.hwnd);
-                Log($"ZONES Restore (on drop, Δ={dx + dy}px) → [{pr.original.Left},{pr.original.Top} {pr.original.Width}x{pr.original.Height}]");
-                RestoreSizeUnderCursor(pr.hwnd, pr.snapped, pr.original, pr.grabOffset);
-                GetWindowRect(pr.hwnd, out var after);
-                Log($"ZONES After restore rect=[{after.Left},{after.Top} {after.Width}x{after.Height}]");
+                Log($"ZONES Skip restore — user resized (snap=[{pr.snapped.Width}x{pr.snapped.Height}] now=[{endRect.Width}x{endRect.Height}]); forgot preSnap so next drag won't restore");
             }
             else
             {
-                Log($"ZONES Skip restore — not enough movement (Δ={dx + dy}px)");
+                GetCursorPos(out var cur);
+                int dx = Math.Abs(cur.X - _dragStartCursor.X);
+                int dy = Math.Abs(cur.Y - _dragStartCursor.Y);
+                if (dx + dy >= 15)
+                {
+                    SnapMemory.Forget(pr.hwnd);
+                    Log($"ZONES Restore (on drop, Δ={dx + dy}px) → [{pr.original.Left},{pr.original.Top} {pr.original.Width}x{pr.original.Height}]");
+                    RestoreSizeUnderCursor(pr.hwnd, pr.snapped, pr.original, pr.grabOffset);
+                    GetWindowRect(pr.hwnd, out var after);
+                    Log($"ZONES After restore rect=[{after.Left},{after.Top} {after.Width}x{after.Height}]");
+                }
+                else
+                {
+                    Log($"ZONES Skip restore — not enough movement (Δ={dx + dy}px)");
+                }
             }
         }
         _pendingRestore = null;
