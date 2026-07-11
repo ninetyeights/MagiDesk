@@ -53,3 +53,7 @@ packages/
 *.tmp
 Thumbs.db
 .DS_Store
+
+# Local backups (not part of the project)
+_cellmap_backup/
+tree_layout_backup.zip
