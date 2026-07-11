@@ -1,5 +1,7 @@
 # MagiDesk
 
+**English** | [中文](README.zh-CN.md)
+
 A PowerToys-style desktop toolkit for Windows — a small collection of window &
 browser productivity tools behind a single Fluent-design tray app.
 
