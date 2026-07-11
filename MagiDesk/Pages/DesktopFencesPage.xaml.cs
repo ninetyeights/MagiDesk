@@ -11,7 +11,7 @@ namespace MagiDesk.Pages;
 /// service + M1.3 Z-order spike). Temporary — remove once the real UI lands.</summary>
 public partial class DesktopFencesPage : Page
 {
-    private FenceOverlayWindow? _testBox;
+    private NativeFenceWindow? _testBox;
 
     public DesktopFencesPage() => InitializeComponent();
 
@@ -43,8 +43,7 @@ public partial class DesktopFencesPage : Page
             Bottom = wa.Top  + 120 + 460,
         };
 
-        _testBox = new FenceOverlayWindow("测试盒子 · Test Fence", rect);
-        _testBox.Show();
+        _testBox = NativeFenceWindow.Create("测试盒子 · Test Fence", rect);
         Output.Text = $"已显示测试盒子 @ [{rect.Left},{rect.Top} {rect.Right - rect.Left}x{rect.Bottom - rect.Top}]\n" +
                       "看它在图标下方还是上方？细节看 %TEMP%\\magidesk.log 的 FENCE 段。";
     }
