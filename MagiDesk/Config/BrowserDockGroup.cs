@@ -9,6 +9,37 @@ public sealed class BrowserDockGroup
     public List<string> ProfileDirs { get; set; } = new();
 }
 
+/// <summary>How the profile dock is anchored to the screen.</summary>
+public enum DockMode
+{
+    /// <summary>Free-floating strip the user drags anywhere. Stays on top
+    /// but does not reserve screen space (the current default behavior).</summary>
+    Floating = 0,
+    /// <summary>Registered as a Windows AppBar pinned to the top edge —
+    /// reserves a strip so maximized windows never overlap it, exactly like
+    /// the system taskbar.</summary>
+    AppBar = 1,
+}
+
+/// <summary>Which monitor(s) the profile dock appears on.</summary>
+public enum DockMonitorMode
+{
+    /// <summary>A single monitor (chosen via <see cref="AppConfig.BrowserDockMonitorId"/>,
+    /// or the primary monitor when unset).</summary>
+    Single = 0,
+    /// <summary>Every connected monitor — one dock window per monitor.</summary>
+    All = 1,
+}
+
+/// <summary>A dock window's floating position in absolute device pixels
+/// (virtual-desktop coordinates). Device pixels — not DIPs — so restoring the
+/// position via SetWindowPos is exact regardless of the target monitor's DPI.</summary>
+public sealed class DockPoint
+{
+    public int X { get; set; }
+    public int Y { get; set; }
+}
+
 /// <summary>Visual separator shown between dock groups.</summary>
 public enum DockGroupSeparator
 {

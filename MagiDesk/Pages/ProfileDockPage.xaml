@@ -1,0 +1,190 @@
+<Page x:Class="MagiDesk.Pages.ProfileDockPage"
+      xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+      xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+      xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+      Title="Profile Dock"
+      x:Name="PageRoot">
+    <ScrollViewer Background="Transparent"
+                  MaxHeight="{Binding ActualHeight, ElementName=PageRoot}"
+                  VerticalScrollBarVisibility="Auto"
+                  HorizontalScrollBarVisibility="Disabled"
+                  Padding="0">
+        <Grid Margin="16,16,20,16">
+            <StackPanel HorizontalAlignment="Stretch" MaxWidth="1100">
+                <TextBlock Text="Profile Dock" FontSize="28" FontWeight="SemiBold"/>
+                <TextBlock Text="桌面上悬浮一条按钮，每个 Chrome profile 一个头像；点击启动或切换到该 profile 的窗口。可分组，也可停靠成任务栏。"
+                           Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                           TextWrapping="Wrap"
+                           Margin="0,2,0,20"/>
+
+                <ui:InfoBar HorizontalAlignment="Stretch"
+                            IsOpen="True"
+                            IsClosable="False"
+                            Severity="Informational"
+                            Title="头像与可见性"
+                            Message="每个 profile 的头像、颜色和显示/隐藏在「浏览器 → 徽标」页里设置，dock 与徽标共用同一套。"
+                            Margin="0,0,0,12"/>
+
+                <!-- Enable -->
+                <ui:Card HorizontalAlignment="Stretch" Padding="18,16" Margin="0,0,0,12">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                            <TextBlock Text="启用 Profile Dock" FontWeight="SemiBold"/>
+                            <TextBlock Text="桌面上悬浮一条 profile 头像按钮，点击启动或切换窗口。"
+                                       FontSize="12"
+                                       Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                       TextWrapping="Wrap"
+                                       Margin="0,2,8,0"/>
+                        </StackPanel>
+                        <ui:ToggleSwitch x:Name="TsDock" Grid.Column="1"
+                                         VerticalAlignment="Center"
+                                         Checked="Dock_Changed" Unchecked="Dock_Changed"/>
+                    </Grid>
+                </ui:Card>
+
+                <StackPanel x:Name="DockBody">
+
+                <!-- Dock mode: floating overlay vs taskbar-style appbar -->
+                <ui:Card HorizontalAlignment="Stretch" Padding="18,16" Margin="0,0,0,12">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="200"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                            <TextBlock Text="停靠模式" FontWeight="SemiBold"/>
+                            <TextBlock Text="悬浮：自由拖到桌面任意位置，悬浮在最上层。任务栏：像系统任务栏一样固定在屏幕顶部并预留空间，最大化的窗口不会被遮挡（按钮居中）。"
+                                       FontSize="12"
+                                       Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                       TextWrapping="Wrap"
+                                       Margin="0,2,8,0"/>
+                        </StackPanel>
+                        <ComboBox Grid.Column="1" x:Name="CmbDockMode"
+                                  VerticalAlignment="Center"
+                                  VerticalContentAlignment="Center"
+                                  SelectionChanged="DockMode_Changed">
+                            <ComboBoxItem Content="悬浮"/>
+                            <ComboBoxItem Content="任务栏（顶部固定）"/>
+                        </ComboBox>
+                    </Grid>
+                </ui:Card>
+
+                <!-- Monitor targeting: single (pick which) vs all monitors -->
+                <ui:Card HorizontalAlignment="Stretch" Padding="18,16" Margin="0,0,0,12">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                            <TextBlock Text="显示器" FontWeight="SemiBold"/>
+                            <TextBlock Text="选择 dock 出现在哪块屏幕。「所有显示器」会在每块屏幕上各显示一条（任务栏模式则每块屏幕顶部各预留一条）。"
+                                       FontSize="12"
+                                       Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                       TextWrapping="Wrap"
+                                       Margin="0,2,8,0"/>
+                        </StackPanel>
+                        <StackPanel Grid.Column="1" Orientation="Vertical" VerticalAlignment="Center">
+                            <ComboBox x:Name="CmbMonitorMode"
+                                      Width="200"
+                                      VerticalContentAlignment="Center"
+                                      SelectionChanged="MonitorMode_Changed">
+                                <ComboBoxItem Content="单个显示器"/>
+                                <ComboBoxItem Content="所有显示器"/>
+                            </ComboBox>
+                            <ComboBox x:Name="CmbMonitor"
+                                      Width="200"
+                                      Margin="0,8,0,0"
+                                      VerticalContentAlignment="Center"
+                                      SelectionChanged="Monitor_Changed"/>
+                        </StackPanel>
+                    </Grid>
+                </ui:Card>
+
+                <!-- Dock icon size -->
+                <ui:Card HorizontalAlignment="Stretch" Padding="18,16" Margin="0,0,0,12">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                            <TextBlock Text="Dock 图标大小" FontWeight="SemiBold"/>
+                            <TextBlock Text="每个 profile 头像按钮的边长 (px)。"
+                                       FontSize="12"
+                                       Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                       Margin="0,2,0,0"/>
+                        </StackPanel>
+                        <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                            <Slider x:Name="DockSizeSlider" Width="180" Minimum="24" Maximum="72"
+                                    IsSnapToTickEnabled="True" TickFrequency="4"
+                                    ValueChanged="DockSize_Changed"/>
+                            <TextBlock x:Name="TxtDockSize" Margin="10,0,0,0" VerticalAlignment="Center" Width="40"/>
+                        </StackPanel>
+                    </Grid>
+                </ui:Card>
+
+                <!-- Dock groups -->
+                <ui:Card HorizontalAlignment="Stretch" Padding="18,16" Margin="0,0,0,12">
+                    <StackPanel>
+                        <Grid Margin="0,0,0,10">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0">
+                                <TextBlock Text="Dock 分组" FontWeight="SemiBold"/>
+                                <TextBlock Text="把几个 profile 归到一组，dock 上相邻组之间用指定样式分隔。用每组的“+ 添加 profile”加入成员。"
+                                           FontSize="12"
+                                           Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                           TextWrapping="Wrap"
+                                           Margin="0,2,0,0"/>
+                            </StackPanel>
+                            <ui:Button Grid.Column="1" Content="新建分组" Padding="12,6"
+                                       VerticalAlignment="Center"
+                                       Click="NewGroup_Click"/>
+                        </Grid>
+
+                        <!-- Separator style + hide-ungrouped -->
+                        <Grid Margin="0,0,0,10">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="200"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="分隔样式"
+                                       VerticalAlignment="Center"
+                                       Margin="0,0,10,0"/>
+                            <ComboBox Grid.Column="1" x:Name="CmbSeparator"
+                                      VerticalContentAlignment="Center"
+                                      SelectionChanged="Separator_Changed">
+                                <ComboBoxItem Content="空隙"/>
+                                <ComboBoxItem Content="竖线"/>
+                                <ComboBoxItem Content="组名标签"/>
+                                <ComboBoxItem Content="半透边框"/>
+                            </ComboBox>
+                            <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center">
+                                <TextBlock Text="隐藏未分组"
+                                           VerticalAlignment="Center"
+                                           Margin="0,0,8,0"/>
+                                <ui:ToggleSwitch x:Name="TsHideUngrouped"
+                                                 VerticalAlignment="Center"
+                                                 Checked="HideUngrouped_Changed"
+                                                 Unchecked="HideUngrouped_Changed"/>
+                            </StackPanel>
+                        </Grid>
+
+                        <StackPanel x:Name="GroupsList"/>
+                    </StackPanel>
+                </ui:Card>
+
+                </StackPanel>
+            </StackPanel>
+        </Grid>
+    </ScrollViewer>
+</Page>

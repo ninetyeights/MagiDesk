@@ -8,25 +8,36 @@ using static MagiDesk.Native.NativeMethods;
 namespace MagiDesk.Features.BrowserBadges;
 
 /// <summary>
-/// Scans for <c>chrome.exe</c> windows on a timer, maps each to its profile
-/// via command-line inspection, and maintains a floating <see cref="BadgeWindow"/>
-/// per visible window.
+/// Scans for Chromium-family browser windows (Chrome, Edge, Brave, Vivaldi,
+/// Opera) on OS window events, maps each to its profile via AUMID / title /
+/// UIA / command-line inspection, and maintains a floating
+/// <see cref="BadgeWindow"/> per visible window. All windows of all supported
+/// browsers share the <c>Chrome_WidgetWin_1</c> class and the
+/// <c>--profile-directory</c> flag, so the logic is generic; the per-browser
+/// differences live in <see cref="BrowserInfo"/>.
+///
+/// Profiles are identified by their browser-qualified <see cref="ChromeProfile.Key"/>
+/// (e.g. "edge:Default") everywhere — the AUMID/HWND caches map to keys, and
+/// the profile dock talks to this service in keys too.
 /// </summary>
 public sealed class BrowserBadgeService : IDisposable
 {
     private readonly Dispatcher _ui;
     private readonly Dictionary<IntPtr, BadgeEntry> _byHwnd = new();
     private readonly Dictionary<int, string?> _profileDirByPid = new();
-    // Cache per HWND — profile doesn't change over a window's life.
-    private readonly Dictionary<IntPtr, string?> _profileDirByHwnd = new();
-    // Cache AUMID → profile directory. Multiple windows of the same profile
-    // share an AUMID, so this skips repeat UIA lookups.
-    private readonly Dictionary<string, string?> _profileDirByAumid = new();
-    // Cache "is this PID chrome.exe?" to avoid re-enumerating processes on
-    // every EVENT_OBJECT_SHOW from the system thread. Chrome's PIDs live for
-    // the session, so a negative answer (not chrome) is final until the PID
-    // is reused — which is rare enough we don't invalidate.
-    private readonly Dictionary<int, bool> _isChromePid = new();
+    // Cache per HWND — profile doesn't change over a window's life. Value is a
+    // browser-qualified profile Key.
+    private readonly Dictionary<IntPtr, string?> _profileKeyByHwnd = new();
+    // Cache AUMID → profile Key. Multiple windows of the same profile
+    // share an AUMID, so this skips repeat UIA lookups. AUMIDs are naturally
+    // namespaced per browser (Chrome="Chrome", Edge="MSEdge", …) so there's no
+    // cross-browser collision.
+    private readonly Dictionary<string, string?> _profileKeyByAumid = new();
+    // Cache "which browser is this PID?" to avoid re-enumerating processes on
+    // every EVENT_OBJECT_SHOW from the system thread. A browser's PIDs live for
+    // the session, so a negative answer (null = not a supported browser) is
+    // final until the PID is reused — rare enough we don't invalidate.
+    private readonly Dictionary<int, BrowserInfo?> _browserByPid = new();
     private List<ChromeProfile> _profiles = new();
     private IntPtr _locationHook;
     private IntPtr _lifecycleHook;
@@ -35,7 +46,7 @@ public sealed class BrowserBadgeService : IDisposable
     private WinEventProc? _lifecycleProc;
     private WinEventProc? _foregroundProc;
 
-    /// <summary>Fires when Chrome window set or foreground changes. The
+    /// <summary>Fires when the browser window set or foreground changes. The
     /// profile dock uses this to refresh its per-button state indicators
     /// without polling.</summary>
     public event Action? WindowsChanged;
@@ -43,7 +54,7 @@ public sealed class BrowserBadgeService : IDisposable
     private sealed class BadgeEntry
     {
         public required BadgeWindow     Window;
-        public required string          ProfileDir;
+        public required string          ProfileKey;
     }
 
     public BrowserBadgeService(Dispatcher ui) { _ui = ui; }
@@ -65,7 +76,7 @@ public sealed class BrowserBadgeService : IDisposable
 
         // Window lifecycle hook — replaces the former 3-sec polling timer.
         // EVENT_OBJECT_SHOW fires whenever any window becomes visible (new
-        // Chrome window, restored from minimized tray state, etc.); DESTROY
+        // browser window, restored from minimized tray state, etc.); DESTROY
         // fires when any window is closed. We cover 0x8001..0x8002 so both
         // events dispatch to the same callback.
         _lifecycleProc = OnLifecycleEvent;
@@ -82,7 +93,7 @@ public sealed class BrowserBadgeService : IDisposable
             EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND,
             IntPtr.Zero, _foregroundProc, 0, 0, WINEVENT_OUTOFCONTEXT);
 
-        // Initial sweep — picks up Chrome windows that existed before our
+        // Initial sweep — picks up browser windows that existed before our
         // hooks were installed. After this, event-driven updates take over.
         Scan();
     }
@@ -127,14 +138,15 @@ public sealed class BrowserBadgeService : IDisposable
         if (evt == EVENT_OBJECT_SHOW)
         {
             // Coarse PID filter on the hook thread — avoids per-event marshal
-            // for non-Chrome windows (menus, tooltips, etc.).
+            // for non-browser windows (menus, tooltips, etc.).
             GetWindowThreadProcessId(hwnd, out uint pid);
             if (pid == 0) return;
-            if (!IsChromePid((int)pid)) return;
+            var browser = GetBrowserForPid((int)pid);
+            if (browser is null) return;
             if (_byHwnd.ContainsKey(hwnd)) return;
             _ui.BeginInvoke(new Action(() =>
             {
-                TryAddBadgeForHwnd(hwnd, (int)pid);
+                TryAddBadgeForHwnd(hwnd, (int)pid, browser);
                 WindowsChanged?.Invoke();
             }));
         }
@@ -147,52 +159,28 @@ public sealed class BrowserBadgeService : IDisposable
         _ui.BeginInvoke(new Action(() => WindowsChanged?.Invoke()));
     }
 
-    /// <summary>Cached PID → is-chrome lookup. Process enumeration is the
-    /// expensive part (~5-10 ms), so we hit it once per novel PID. Also
-    /// verifies the executable lives under a recognized Google Chrome
-    /// install directory — any chrome.exe from a portable copy, repackaged
-    /// app, or other Chromium-based browser named chrome.exe is rejected.</summary>
-    private bool IsChromePid(int pid)
+    /// <summary>Cached PID → browser lookup. Process enumeration is the
+    /// expensive part (~5-10 ms), so we hit it once per novel PID. Verifies the
+    /// executable lives under a recognized install directory for one of the
+    /// supported browsers — any browser exe from a portable copy, repackaged
+    /// app, or the Edge WebView2 runtime is rejected.</summary>
+    private BrowserInfo? GetBrowserForPid(int pid)
     {
-        if (_isChromePid.TryGetValue(pid, out bool known)) return known;
-        bool isChrome = false;
+        if (_browserByPid.TryGetValue(pid, out var known)) return known;
+        BrowserInfo? browser = null;
         try
         {
             using var p = Process.GetProcessById(pid);
-            if (string.Equals(p.ProcessName, "chrome", StringComparison.OrdinalIgnoreCase))
-            {
-                string? exe = null;
-                try { exe = p.MainModule?.FileName; } catch { }
-                isChrome = exe is not null && IsDefaultChromeInstallPath(exe);
-            }
+            string? exe = null;
+            try { exe = p.MainModule?.FileName; } catch { }
+            browser = BrowserInfo.MatchExe(exe);
         }
         catch { }
-        _isChromePid[pid] = isChrome;
-        return isChrome;
+        _browserByPid[pid] = browser;
+        return browser;
     }
 
-    /// <summary>Return true if <paramref name="exePath"/> is inside a standard
-    /// Google Chrome install location. Guards against other chrome-branded
-    /// browsers or portable / repackaged copies ending up with a badge.</summary>
-    private static bool IsDefaultChromeInstallPath(string exePath)
-    {
-        // Known install roots (trailing separator matters — avoids matching a
-        // sibling dir like "Google Chrome Beta").
-        var roots = new[]
-        {
-            System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), @"Google\Chrome\Application\"),
-            System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),       @"Google\Chrome\Application\"),
-            System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),    @"Google\Chrome\Application\"),
-        };
-        foreach (var root in roots)
-        {
-            if (string.IsNullOrEmpty(root)) continue;
-            if (exePath.StartsWith(root, StringComparison.OrdinalIgnoreCase)) return true;
-        }
-        return false;
-    }
-
-    private void TryAddBadgeForHwnd(IntPtr hwnd, int pid)
+    private void TryAddBadgeForHwnd(IntPtr hwnd, int pid, BrowserInfo browser)
     {
         if (_byHwnd.ContainsKey(hwnd)) return;
         if (!NativeMethods.IsWindow(hwnd)) return;
@@ -211,47 +199,47 @@ public sealed class BrowserBadgeService : IDisposable
         if (!cfg.BrowserBadgeEnabled) return;
 
         string title = GetWindowTitle(hwnd);
-        string? profileDir = ResolveProfileDirForWindow(hwnd, pid, title);
-        if (profileDir is null) return;
+        string? profileKey = ResolveProfileKeyForWindow(hwnd, pid, title, browser);
+        if (profileKey is null) return;
 
         // Refresh unconditionally here — a brand-new profile created after
         // startup needs its fresh Local State data (name, highlight color,
         // GAIA picture path) picked up, otherwise ApplyProfile would render
         // with stale/default values and show the wrong avatar.
         RefreshCatalog();
-        var profile = _profiles.FirstOrDefault(p => string.Equals(p.Directory, profileDir, StringComparison.OrdinalIgnoreCase));
+        var profile = _profiles.FirstOrDefault(p => string.Equals(p.Key, profileKey, StringComparison.OrdinalIgnoreCase));
         if (profile is null) return;
 
-        var settings = cfg.BrowserProfiles.TryGetValue(profile.Directory, out var s) ? s : new BrowserProfileSettings();
+        var settings = cfg.BrowserProfiles.TryGetValue(profile.Key, out var s) ? s : new BrowserProfileSettings();
         if (!settings.Visible) return;
 
         var badge = new BadgeWindow(hwnd);
-        var entry = new BadgeEntry { Window = badge, ProfileDir = profile.Directory };
+        var entry = new BadgeEntry { Window = badge, ProfileKey = profile.Key };
         _byHwnd[hwnd] = entry;
         badge.ApplyProfile(profile, settings, cfg.BrowserBadgeHeight);
         // UpdatePosition does EnsureHandle + SetWindowPos+SWP_SHOWWINDOW so
         // the window appears at its final position on first paint (no flash).
         badge.UpdatePosition();
-        Log($"  event-added badge for profile '{profile.Name}' on hwnd {hwnd:X}");
+        Log($"  event-added badge for profile '{profile.Name}' [{profile.Key}] on hwnd {hwnd:X}");
     }
 
     public void RefreshCatalog()
     {
         _profiles = ChromeProfileCatalog.LoadAll();
-        // Prepopulate AUMID → profileDir using Chrome's documented formula
-        // (dir name with spaces → underscores). If Chrome's version matches
-        // the formula, every window resolves via AUMID alone — no UIA, no
-        // cmdline guesswork, no confusion in multi-profile browser mode.
-        // If the formula happens to miss, ResolveProfileDirForWindow still
-        // falls through to title/cmdline — additive, no regression.
+        // Prepopulate AUMID → profileKey using each browser's documented
+        // formula. If the browser's AUMID matches the formula, every window
+        // resolves via AUMID alone — no UIA, no cmdline guesswork, no confusion
+        // in multi-profile browser mode. If the formula happens to miss,
+        // ResolveProfileKeyForWindow still falls through to title/UIA/cmdline —
+        // additive, no regression.
         foreach (var p in _profiles)
         {
             // Prepopulate both current and legacy formula AUMIDs so window
-            // lookup hits regardless of which form Chrome reports.
-            _profileDirByAumid[ChromeAumid.Compute(p.Directory)] = p.Directory;
-            _profileDirByAumid[ChromeAumid.ComputeLegacy(p.Directory)] = p.Directory;
+            // lookup hits regardless of which form the browser reports.
+            _profileKeyByAumid[ChromeAumid.Compute(p.Browser, p.Directory)] = p.Key;
+            _profileKeyByAumid[ChromeAumid.ComputeLegacy(p.Browser, p.Directory)] = p.Key;
         }
-        Log($"RefreshCatalog loaded {_profiles.Count} profiles, {_profileDirByAumid.Count} AUMIDs prepopulated");
+        Log($"RefreshCatalog loaded {_profiles.Count} profiles, {_profileKeyByAumid.Count} AUMIDs prepopulated");
     }
 
     private static void Log(string msg)
@@ -267,64 +255,63 @@ public sealed class BrowserBadgeService : IDisposable
 
     public IReadOnlyList<ChromeProfile> Profiles => _profiles;
 
-    /// <summary>Every tracked Chrome top-level window and the profile dir it
+    /// <summary>Every tracked browser top-level window and the profile key it
     /// belongs to. Consumed by the profile dock (launch vs. focus vs. cycle).</summary>
-    public IEnumerable<(IntPtr Hwnd, string ProfileDir)> TrackedWindows
-        => _byHwnd.Select(kv => (kv.Key, kv.Value.ProfileDir));
+    public IEnumerable<(IntPtr Hwnd, string ProfileKey)> TrackedWindows
+        => _byHwnd.Select(kv => (kv.Key, kv.Value.ProfileKey));
 
-    /// <summary>All currently-visible Chrome top-level window HWNDs. The
-    /// dock uses this to snapshot the window set before a launch and then
-    /// detect the new window by set difference afterwards.</summary>
-    public IEnumerable<IntPtr> EnumerateAllChromeHwnds()
+    /// <summary>All currently-visible browser top-level window HWNDs (all
+    /// supported browsers). The dock uses this to snapshot the window set
+    /// before a launch and then detect the new window by set difference.</summary>
+    public IEnumerable<IntPtr> EnumerateAllBrowserHwnds()
     {
         // includeIconic: true so dock state and post-launch snapshot include
         // minimized windows. Otherwise a profile whose only window is in the
-        // taskbar reads as "no windows" and a dock click relaunches Chrome.
-        foreach (var (hwnd, _) in EnumerateChromeWindows(includeIconic: true)) yield return hwnd;
+        // taskbar reads as "no windows" and a dock click relaunches the browser.
+        foreach (var (hwnd, _, _) in EnumerateBrowserWindows(includeIconic: true)) yield return hwnd;
     }
 
-    /// <summary>(HWND, profileDir) pairs for Chrome windows whose profile we
+    /// <summary>(HWND, profileKey) pairs for browser windows whose profile we
     /// already know from cache. Does not trigger any fresh resolution — safe
     /// to call at high frequency for dock status updates.</summary>
-    public IEnumerable<(IntPtr Hwnd, string ProfileDir)> CachedProfileWindows()
+    public IEnumerable<(IntPtr Hwnd, string ProfileKey)> CachedProfileWindows()
     {
-        foreach (var hwnd in EnumerateAllChromeHwnds())
+        foreach (var hwnd in EnumerateAllBrowserHwnds())
         {
-            if (_profileDirByHwnd.TryGetValue(hwnd, out var dir) && dir is not null)
-                yield return (hwnd, dir);
+            if (_profileKeyByHwnd.TryGetValue(hwnd, out var key) && key is not null)
+                yield return (hwnd, key);
         }
     }
 
-    /// <summary>Explicitly associate an HWND with a profile directory.
-    /// Called by the dock after it observes a new Chrome window appear
-    /// post-launch — sidesteps AUMID/UIA/cmdline races by trusting the
-    /// temporal correlation ("we just launched Profile X, new HWND must
-    /// belong to Profile X").</summary>
-    public void RegisterHwndProfile(IntPtr hwnd, string profileDir)
+    /// <summary>Explicitly associate an HWND with a profile key. Called by the
+    /// dock after it observes a new browser window appear post-launch —
+    /// sidesteps AUMID/UIA/cmdline races by trusting the temporal correlation
+    /// ("we just launched Profile X, new HWND must belong to Profile X").</summary>
+    public void RegisterHwndProfile(IntPtr hwnd, string profileKey)
     {
-        _profileDirByHwnd[hwnd] = profileDir;
+        _profileKeyByHwnd[hwnd] = profileKey;
         string? aumid = WindowAumid.Read(hwnd);
-        if (aumid is not null) _profileDirByAumid[aumid] = profileDir;
+        if (aumid is not null) _profileKeyByAumid[aumid] = profileKey;
     }
 
-    /// <summary>Fresh enumeration of all Chrome top-level windows whose
-    /// profile matches <paramref name="profileDir"/>. Bypasses the badge
+    /// <summary>Fresh enumeration of all browser top-level windows whose
+    /// profile matches <paramref name="profileKey"/>. Bypasses the badge
     /// tracking dictionary (which excludes profiles with Visible=false and
     /// may be stale after window-lifecycle races), so the profile dock can
     /// reliably find existing windows for focus/cycle.</summary>
-    public List<IntPtr> FindWindowsForProfile(string profileDir)
+    public List<IntPtr> FindWindowsForProfile(string profileKey)
     {
         var result = new List<IntPtr>();
         // includeIconic: true — dock click on a profile whose only window is
         // minimized must find the HWND so FocusWindow can SW_RESTORE it,
         // instead of falling through to the launch path and spawning a dup.
-        foreach (var (hwnd, pid) in EnumerateChromeWindows(includeIconic: true))
+        foreach (var (hwnd, pid, browser) in EnumerateBrowserWindows(includeIconic: true))
         {
             string title = GetWindowTitle(hwnd);
             // UIA allowed: a dock click is user-initiated, and after the first
             // call the learned AUMID cache handles subsequent clicks.
-            string? dir = ResolveProfileDirForWindow(hwnd, pid, title, allowUia: true);
-            if (string.Equals(dir, profileDir, StringComparison.OrdinalIgnoreCase))
+            string? key = ResolveProfileKeyForWindow(hwnd, pid, title, browser, allowUia: true);
+            if (string.Equals(key, profileKey, StringComparison.OrdinalIgnoreCase))
                 result.Add(hwnd);
         }
         return result;
@@ -366,43 +353,41 @@ public sealed class BrowserBadgeService : IDisposable
             return;
         }
 
-        // Enumerate Chrome top-level windows.
-        var chromeWindows = EnumerateChromeWindows().ToList();
-        Log($"Scan: found {chromeWindows.Count} chrome windows, catalog has {_profiles.Count} profiles");
+        // Enumerate all supported browsers' top-level windows.
+        var windows = EnumerateBrowserWindows().ToList();
+        Log($"Scan: found {windows.Count} browser windows, catalog has {_profiles.Count} profiles");
         var seen = new HashSet<IntPtr>();
 
-        foreach (var (hwnd, pid) in chromeWindows)
+        foreach (var (hwnd, pid, browser) in windows)
         {
             seen.Add(hwnd);
             string title = GetWindowTitle(hwnd);
             // Initial/config-change scan: UIA allowed. One-time a11y trigger
-            // happens when MagiDesk is launched with Chrome already running;
-            // populates the AUMID cache so later SHOW events resolve fast
-            // without needing UIA at all.
-            string? profileDir = ResolveProfileDirForWindow(hwnd, pid, title, allowUia: true);
-            Log($"  hwnd={hwnd:X} pid={pid} title=\"{title}\" profileDir={profileDir ?? "<null>"}");
-            if (profileDir is null) continue;
+            // happens when MagiDesk is launched with the browser already
+            // running; populates the AUMID cache so later SHOW events resolve
+            // fast without needing UIA at all.
+            string? profileKey = ResolveProfileKeyForWindow(hwnd, pid, title, browser, allowUia: true);
+            Log($"  hwnd={hwnd:X} pid={pid} browser={browser.Id} title=\"{title}\" profileKey={profileKey ?? "<null>"}");
+            if (profileKey is null) continue;
 
-            var profile = _profiles.FirstOrDefault(p => string.Equals(p.Directory, profileDir, StringComparison.OrdinalIgnoreCase));
+            var profile = _profiles.FirstOrDefault(p => string.Equals(p.Key, profileKey, StringComparison.OrdinalIgnoreCase));
             if (profile is null)
             {
                 // New profile created after our last catalog refresh.
                 RefreshCatalog();
-                profile = _profiles.FirstOrDefault(p => string.Equals(p.Directory, profileDir, StringComparison.OrdinalIgnoreCase));
+                profile = _profiles.FirstOrDefault(p => string.Equals(p.Key, profileKey, StringComparison.OrdinalIgnoreCase));
                 if (profile is null) continue;
             }
 
-            var settings = cfg.BrowserProfiles.TryGetValue(profile.Directory, out var s) ? s : new BrowserProfileSettings();
+            var settings = cfg.BrowserProfiles.TryGetValue(profile.Key, out var s) ? s : new BrowserProfileSettings();
             if (!settings.Visible) { DisposeBadge(hwnd); continue; }
 
-            bool justCreated = false;
             if (!_byHwnd.TryGetValue(hwnd, out var entry))
             {
                 var badge = new BadgeWindow(hwnd);
-                entry = new BadgeEntry { Window = badge, ProfileDir = profile.Directory };
+                entry = new BadgeEntry { Window = badge, ProfileKey = profile.Key };
                 _byHwnd[hwnd] = entry;
-                justCreated = true;
-                Log($"    created badge for profile '{profile.Name}' on hwnd {hwnd:X}");
+                Log($"    created badge for profile '{profile.Name}' [{profile.Key}] on hwnd {hwnd:X}");
             }
             entry.Window.ApplyProfile(profile, settings, cfg.BrowserBadgeHeight);
             // UpdatePosition handles both positioning and first-time show via
@@ -428,39 +413,47 @@ public sealed class BrowserBadgeService : IDisposable
         if (!_byHwnd.TryGetValue(hwnd, out var entry)) return;
         try { entry.Window.Close(); } catch { }
         _byHwnd.Remove(hwnd);
-        _profileDirByHwnd.Remove(hwnd);
+        _profileKeyByHwnd.Remove(hwnd);
     }
 
     // ========================================================== helpers
 
-    private static IEnumerable<(IntPtr hwnd, int pid)> EnumerateChromeWindows(bool includeIconic = false)
+    /// <summary>Map every running supported-browser PID to its
+    /// <see cref="BrowserInfo"/>, validating the executable path so portable
+    /// copies and the Edge WebView2 runtime are excluded.</summary>
+    private static Dictionary<int, BrowserInfo> BuildPidBrowserMap()
     {
-        var chromePids = new HashSet<int>();
-        foreach (var p in Process.GetProcessesByName("chrome"))
+        var map = new Dictionary<int, BrowserInfo>();
+        foreach (var browser in BrowserInfo.All)
         {
-            try
+            foreach (var p in Process.GetProcessesByName(browser.ProcessName))
             {
-                // Only accept chrome.exe that's in a standard Google Chrome
-                // install location. Portable copies, repackaged apps, or
-                // other Chromium browsers using "chrome.exe" as process name
-                // would otherwise get badges attached.
-                string? exe = null;
-                try { exe = p.MainModule?.FileName; } catch { }
-                if (exe is not null && IsDefaultChromeInstallPath(exe))
-                    chromePids.Add(p.Id);
+                try
+                {
+                    string? exe = null;
+                    try { exe = p.MainModule?.FileName; } catch { }
+                    if (BrowserInfo.MatchExe(exe) is BrowserInfo b && b.Kind == browser.Kind)
+                        map[p.Id] = b;
+                }
+                catch { }
+                p.Dispose();
             }
-            catch { }
-            p.Dispose();
         }
-        Log($"  EnumerateChromeWindows: found {chromePids.Count} default-install chrome.exe PIDs: [{string.Join(",", chromePids)}]");
-        if (chromePids.Count == 0) yield break;
+        return map;
+    }
 
-        var list = new List<(IntPtr, int)>();
+    private static IEnumerable<(IntPtr hwnd, int pid, BrowserInfo browser)> EnumerateBrowserWindows(bool includeIconic = false)
+    {
+        var pidBrowser = BuildPidBrowserMap();
+        Log($"  EnumerateBrowserWindows: {pidBrowser.Count} browser PIDs: [{string.Join(",", pidBrowser.Select(kv => $"{kv.Key}:{kv.Value.Id}"))}]");
+        if (pidBrowser.Count == 0) yield break;
+
+        var list = new List<(IntPtr, int, BrowserInfo)>();
         var classBuf = new System.Text.StringBuilder(256);
         NativeMethods.EnumWindows((h, _) =>
         {
             NativeMethods.GetWindowThreadProcessId(h, out uint pid);
-            if (!chromePids.Contains((int)pid)) return true;
+            if (!pidBrowser.TryGetValue((int)pid, out var browser)) return true;
 
             classBuf.Clear();
             NativeMethods.GetClassName(h, classBuf, classBuf.Capacity);
@@ -468,7 +461,6 @@ public sealed class BrowserBadgeService : IDisposable
             bool vis = NativeMethods.IsWindowVisible(h);
             bool iconic = NativeMethods.IsIconic(h);
             NativeMethods.GetWindowRect(h, out var r);
-            Log($"    chrome hwnd={h:X} pid={pid} cls='{cls}' vis={vis} iconic={iconic} rect=[{r.Left},{r.Top} {r.Right - r.Left}x{r.Bottom - r.Top}]");
 
             if (!vis) return true;
             if (iconic && !includeIconic) return true;
@@ -484,28 +476,28 @@ public sealed class BrowserBadgeService : IDisposable
             // Skip owned popups (profile picker, extensions dropdown, etc.).
             // Only true top-level browser frames have no owner.
             if (NativeMethods.GetWindow(h, NativeMethods.GW_OWNER) != IntPtr.Zero) return true;
-            list.Add((h, (int)pid));
+            list.Add((h, (int)pid, browser));
             return true;
         }, IntPtr.Zero);
 
         foreach (var pair in list) yield return pair;
     }
 
-    private string? ResolveProfileDirForWindow(IntPtr hwnd, int pid, string title)
-        => ResolveProfileDirForWindow(hwnd, pid, title, allowUia: false);
+    private string? ResolveProfileKeyForWindow(IntPtr hwnd, int pid, string title, BrowserInfo browser)
+        => ResolveProfileKeyForWindow(hwnd, pid, title, browser, allowUia: false);
 
-    /// <summary>Resolve a Chrome HWND to its profile directory. Set
-    /// <paramref name="allowUia"/>=true only when the caller can afford to
-    /// trigger Chrome's accessibility-tree build (whole-session slowdown):
+    /// <summary>Resolve a browser HWND to its browser-qualified profile key.
+    /// Set <paramref name="allowUia"/>=true only when the caller can afford to
+    /// trigger Chromium's accessibility-tree build (whole-session slowdown):
     /// initial startup scan (one-time cost) and user-initiated dock clicks
     /// are OK. Event-driven paths (EVENT_OBJECT_SHOW) MUST pass false to
     /// avoid the "not responding / white screen" freeze when new profile
     /// windows appear.</summary>
-    private string? ResolveProfileDirForWindow(IntPtr hwnd, int pid, string title, bool allowUia)
+    private string? ResolveProfileKeyForWindow(IntPtr hwnd, int pid, string title, BrowserInfo browser, bool allowUia)
     {
         // Only short-circuit on a positive cached answer. A prior null (e.g.,
         // from an early race where AUMID wasn't set yet) should retry.
-        if (_profileDirByHwnd.TryGetValue(hwnd, out var hwndCached) && hwndCached is not null)
+        if (_profileKeyByHwnd.TryGetValue(hwnd, out var hwndCached) && hwndCached is not null)
             return hwndCached;
 
         // 0) AUMID — fast (< 1 ms), and the SAME across all windows of one
@@ -514,83 +506,90 @@ public sealed class BrowserBadgeService : IDisposable
         // is treated as miss so we retry.
         string? aumid = WindowAumid.Read(hwnd);
         if (aumid is not null
-            && _profileDirByAumid.TryGetValue(aumid, out var aumCached)
+            && _profileKeyByAumid.TryGetValue(aumid, out var aumCached)
             && aumCached is not null)
         {
-            _profileDirByHwnd[hwnd] = aumCached;
+            _profileKeyByHwnd[hwnd] = aumCached;
             return aumCached;
         }
 
-        string? dir = null;
+        string? key = null;
         // Only cache when the answer came from a trustworthy source. The
         // cmdline fallback returns the same dir for every window of a
-        // multi-profile chrome.exe process, so caching its answer to an AUMID
+        // multi-profile browser process, so caching its answer to an AUMID
         // would mis-route ALL future windows of that AUMID — including
         // visible ones that later need a correct badge.
         bool fromTrusted = false;
 
-        // 1) Title suffix ("... - <Profile> - Google Chrome").
+        // 1) Title suffix ("... - <Profile> - <Browser>"). Only profiles of
+        // this window's browser are considered.
         if (!string.IsNullOrEmpty(title))
         {
             foreach (var p in _profiles)
             {
+                if (p.Browser.Kind != browser.Kind) continue;
                 if (string.IsNullOrEmpty(p.Name)) continue;
-                if (title.Contains($" - {p.Name} - Google Chrome", StringComparison.Ordinal)
-                 || title.EndsWith($" - {p.Name}", StringComparison.Ordinal))
-                { dir = p.Directory; fromTrusted = true; break; }
+                bool hit = false;
+                foreach (var suffix in browser.TitleSuffixes)
+                {
+                    if (title.Contains($" - {p.Name}{suffix}", StringComparison.Ordinal))
+                    { hit = true; break; }
+                }
+                if (hit || title.EndsWith($" - {p.Name}", StringComparison.Ordinal))
+                { key = p.Key; fromTrusted = true; break; }
             }
         }
 
         // 2) UI Automation — only when the caller explicitly allowed it.
-        // Triggering Chrome's UIA tree flips the browser into accessibility
+        // Triggering Chromium's UIA tree flips the browser into accessibility
         // mode for the whole process, so we want to do it at most once per
         // session (initial scan) and not at all for new-window events.
-        if (dir is null && allowUia)
+        if (key is null && allowUia)
         {
-            dir = ResolveViaUIAutomation(hwnd);
-            if (dir is not null) { fromTrusted = true; Log($"    resolved via UIA: aumid={aumid ?? "<none>"} → {dir}"); }
+            key = ResolveViaUIAutomation(hwnd, browser);
+            if (key is not null) { fromTrusted = true; Log($"    resolved via UIA: aumid={aumid ?? "<none>"} → {key}"); }
         }
 
         // 3) Command-line fallback (reads --profile-directory via WMI).
-        // Unreliable in multi-profile browser-process mode where one chrome.exe
+        // Unreliable in multi-profile browser-process mode where one process
         // hosts many profile windows — the cmdline reflects only the first
         // profile launched. Last resort when AUMID isn't cached and UIA isn't
         // allowed. Returned but NOT cached. Critically, return null when no
         // --profile-directory flag is present — guessing "Default" is what
         // makes wrong-profile windows show the Default badge, which is much
         // worse than no badge at all.
-        if (dir is null)
+        if (key is null)
         {
-            if (!_profileDirByPid.TryGetValue(pid, out var cached))
+            if (!_profileDirByPid.TryGetValue(pid, out var cachedDir))
             {
                 string? cmd = ProcessCommandLine.Get(pid);
-                cached = cmd is not null
+                cachedDir = cmd is not null
                     ? ProcessCommandLine.ExtractFlag(cmd, "--profile-directory")
                     : null;
-                _profileDirByPid[pid] = cached;
+                _profileDirByPid[pid] = cachedDir;
             }
-            dir = cached;
+            if (cachedDir is not null) key = $"{browser.Id}:{cachedDir}";
             // fromTrusted stays false — see comment above.
         }
 
-        // Only cache a positive, trusted answer — caching null or a guess would poison later
-        // lookups for a window whose AUMID just hadn't been set yet when we
-        // first saw it (e.g., a freshly-launched profile window that we then
-        // want to focus on a later dock click).
-        if (dir is not null && fromTrusted)
+        // Only cache a positive, trusted answer — caching null or a guess would
+        // poison later lookups for a window whose AUMID just hadn't been set yet
+        // when we first saw it (e.g., a freshly-launched profile window that we
+        // then want to focus on a later dock click).
+        if (key is not null && fromTrusted)
         {
-            if (aumid is not null) _profileDirByAumid[aumid] = dir;
-            _profileDirByHwnd[hwnd] = dir;
+            if (aumid is not null) _profileKeyByAumid[aumid] = key;
+            _profileKeyByHwnd[hwnd] = key;
         }
-        return dir;
+        return key;
     }
 
     /// <summary>
-    /// Walks Chrome's UIA tree looking for a Button whose Name matches one of
-    /// our known profile names. Chrome's avatar/profile button in the toolbar
-    /// is labelled with the profile's display name.
+    /// Walks the browser's UIA tree looking for a Button whose Name matches one
+    /// of that browser's known profile names. The avatar/profile button in the
+    /// toolbar is labelled with the profile's display name.
     /// </summary>
-    private string? ResolveViaUIAutomation(IntPtr hwnd)
+    private string? ResolveViaUIAutomation(IntPtr hwnd, BrowserInfo browser)
     {
         try
         {
@@ -612,10 +611,11 @@ public sealed class BrowserBadgeService : IDisposable
 
                 foreach (var p in _profiles)
                 {
+                    if (p.Browser.Kind != browser.Kind) continue;
                     if (string.IsNullOrEmpty(p.Name)) continue;
                     if (name.Equals(p.Name, StringComparison.OrdinalIgnoreCase)
                      || name.Contains(p.Name, StringComparison.OrdinalIgnoreCase))
-                        return p.Directory;
+                        return p.Key;
                 }
             }
         }

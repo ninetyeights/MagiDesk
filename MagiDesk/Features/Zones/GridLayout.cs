@@ -149,13 +149,15 @@ internal sealed class GridLayout
         bool nearTop    = y - hit.Bounds.Top    < mergeBand;
         bool nearBottom = hit.Bounds.Bottom - y <= mergeBand;
 
-        // 4-zone corner merge first — most specific.
+        // Corner merge first — most specific. Grows a clean rectangle one
+        // neighbour into the adjacent column AND row. Unlike a strict 2×2
+        // cross this also handles irregular layouts where the two sides'
+        // dividers don't line up (e.g. a full-height column next to a split
+        // one), as long as the union is still a rectangle tiled by whole zones.
         if ((nearLeft || nearRight) && (nearTop || nearBottom))
         {
-            int vx = nearRight  ? hit.Bounds.Right  : hit.Bounds.Left;
-            int hy = nearBottom ? hit.Bounds.Bottom : hit.Bounds.Top;
-            var quad = TryFindCornerQuad(vx, hy, eps);
-            if (quad is not null) return quad;
+            var corner = TryGrowCornerRect(hit, goRight: nearRight, goDown: nearBottom, eps);
+            if (corner is not null) return corner;
         }
 
         // 2-zone horizontal merge across a vertical edge.
@@ -228,38 +230,68 @@ internal sealed class GridLayout
         return null;
     }
 
-    /// <summary>Locate four zones meeting at the corner point <c>(vx, hy)</c>
-    /// — top-left whose right/bottom hit the corner, top-right whose
-    /// left/bottom hit it, bottom-left whose right/top hit, bottom-right
-    /// whose left/top hit. All four must align so their union is one
-    /// rectangle.</summary>
-    private ZoneSelection? TryFindCornerQuad(int vx, int hy, int eps)
+    /// <summary>Grow a clean rectangle from <paramref name="hit"/> toward the
+    /// hovered corner: one neighbour across the vertical edge (<paramref
+    /// name="goRight"/> picks which side) and one across the horizontal edge
+    /// (<paramref name="goDown"/>). The candidate rectangle is accepted only if
+    /// it is exactly tiled by whole zones — no zone straddles its boundary and
+    /// there are no gaps — so the merged target is always a real rectangle.
+    /// Handles a plain 2×2 cross (grows into the next cell each way) and
+    /// irregular corners alike (e.g. two split cells beside one full-height
+    /// column merge into the enclosing rectangle).</summary>
+    private ZoneSelection? TryGrowCornerRect(Zone hit, bool goRight, bool goDown, int eps)
     {
-        Zone? tl = null, tr = null, bl = null, br = null;
+        int vx = goRight ? hit.Bounds.Right  : hit.Bounds.Left;
+        int hy = goDown  ? hit.Bounds.Bottom : hit.Bounds.Top;
+        int cx = (hit.Bounds.Left + hit.Bounds.Right) / 2;
+        int cy = (hit.Bounds.Top  + hit.Bounds.Bottom) / 2;
+
+        int x0 = hit.Bounds.Left, x1 = hit.Bounds.Right;
+        int y0 = hit.Bounds.Top,  y1 = hit.Bounds.Bottom;
+
+        // Probe just past the shared edges to find the neighbouring column/row;
+        // extend the rectangle to that neighbour's far edge.
+        var hn = goRight ? HitTest(vx + 2, cy) : HitTest(vx - 2, cy);
+        if (hn is null) return null;
+        if (goRight) x1 = hn.Bounds.Right; else x0 = hn.Bounds.Left;
+
+        var vn = goDown ? HitTest(cx, hy + 2) : HitTest(cx, hy - 2);
+        if (vn is null) return null;
+        if (goDown) y1 = vn.Bounds.Bottom; else y0 = vn.Bounds.Top;
+
+        // Must have grown on BOTH axes; a single-axis growth is a plain edge
+        // pair, left to the 2-zone paths below.
+        if (x1 - x0 <= (hit.Bounds.Right  - hit.Bounds.Left) + eps) return null;
+        if (y1 - y0 <= (hit.Bounds.Bottom - hit.Bounds.Top)  + eps) return null;
+
+        // Validate exact tiling: collect the zones fully inside, reject if any
+        // zone straddles the boundary, and require the inside areas to fill the
+        // rectangle (no gaps).
+        var members = new List<Zone>();
+        long areaSum = 0;
         foreach (var z in Zones)
         {
-            bool atLeft   = Math.Abs(z.Bounds.Right  - vx) < eps;
-            bool atRight  = Math.Abs(z.Bounds.Left   - vx) < eps;
-            bool atTop    = Math.Abs(z.Bounds.Bottom - hy) < eps;
-            bool atBottom = Math.Abs(z.Bounds.Top    - hy) < eps;
-            if (atLeft  && atTop)    tl ??= z;
-            if (atRight && atTop)    tr ??= z;
-            if (atLeft  && atBottom) bl ??= z;
-            if (atRight && atBottom) br ??= z;
+            bool inside = z.Bounds.Left  >= x0 - eps && z.Bounds.Top    >= y0 - eps
+                       && z.Bounds.Right <= x1 + eps && z.Bounds.Bottom <= y1 + eps;
+            if (inside)
+            {
+                members.Add(z);
+                areaSum += (long)(z.Bounds.Right - z.Bounds.Left) * (z.Bounds.Bottom - z.Bounds.Top);
+                continue;
+            }
+            bool straddles = z.Bounds.Left < x1 - eps && z.Bounds.Right > x0 + eps
+                          && z.Bounds.Top  < y1 - eps && z.Bounds.Bottom > y0 + eps;
+            if (straddles) return null; // union wouldn't be a clean rectangle
         }
-        if (tl is null || tr is null || bl is null || br is null) return null;
-        if (Math.Abs(tl.Bounds.Top    - tr.Bounds.Top)    >= eps) return null;
-        if (Math.Abs(bl.Bounds.Bottom - br.Bounds.Bottom) >= eps) return null;
-        if (Math.Abs(tl.Bounds.Left   - bl.Bounds.Left)   >= eps) return null;
-        if (Math.Abs(tr.Bounds.Right  - br.Bounds.Right)  >= eps) return null;
+        if (members.Count < 2) return null;
 
-        var merged = new NativeMethods.RECT
-        {
-            Left   = tl.Bounds.Left,
-            Top    = tl.Bounds.Top,
-            Right  = tr.Bounds.Right,
-            Bottom = bl.Bounds.Bottom,
-        };
-        return new ZoneSelection(new[] { tl, tr, bl, br }, merged);
+        long rectArea = (long)(x1 - x0) * (y1 - y0);
+        // Tolerance scales with rect size to absorb int-truncation slop at
+        // shared edges, still far below a single zone's area.
+        long tol = (long)eps * ((x1 - x0) + (y1 - y0));
+        if (Math.Abs(areaSum - rectArea) > tol) return null; // gap → not tiled
+
+        return new ZoneSelection(members.ToArray(),
+            new NativeMethods.RECT { Left = x0, Top = y0, Right = x1, Bottom = y1 });
     }
 }

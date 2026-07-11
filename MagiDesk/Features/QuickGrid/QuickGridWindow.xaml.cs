@@ -154,10 +154,15 @@ public partial class QuickGridWindow : Window
         _visuals.Clear();
         if (_monitors.Count == 0) { Close(); return; }
 
-        int L = _monitors.Min(m => m.MonitorArea.Left);
-        int T = _monitors.Min(m => m.MonitorArea.Top);
-        int R = _monitors.Max(m => m.MonitorArea.Right);
-        int B = _monitors.Max(m => m.MonitorArea.Bottom);
+        // Lay the picker out over each monitor's WORK area (not the full monitor):
+        // that's the region windows actually snap into — see ComputeSelectionRect.
+        // Using the work area keeps the picker WYSIWYG when an AppBar (e.g. the
+        // Profile Dock in taskbar mode) or the system taskbar reserves an edge,
+        // so the cell you pick maps exactly to where the window lands.
+        int L = _monitors.Min(m => m.WorkArea.Left);
+        int T = _monitors.Min(m => m.WorkArea.Top);
+        int R = _monitors.Max(m => m.WorkArea.Right);
+        int B = _monitors.Max(m => m.WorkArea.Bottom);
         double vw = R - L, vh = B - T;
         double avail_w = CanvasW - MonitorPadding * 2;
         double avail_h = CanvasH - MonitorPadding * 2;
@@ -171,10 +176,10 @@ public partial class QuickGridWindow : Window
         {
             var cells = ResolveCells(m);
 
-            double w = (m.MonitorArea.Right - m.MonitorArea.Left) * scale;
-            double h = (m.MonitorArea.Bottom - m.MonitorArea.Top) * scale;
-            double x = (m.MonitorArea.Left - L) * scale + offsetX;
-            double y = (m.MonitorArea.Top  - T) * scale + offsetY;
+            double w = (m.WorkArea.Right - m.WorkArea.Left) * scale;
+            double h = (m.WorkArea.Bottom - m.WorkArea.Top) * scale;
+            double x = (m.WorkArea.Left - L) * scale + offsetX;
+            double y = (m.WorkArea.Top  - T) * scale + offsetY;
 
             var card = new Border
             {

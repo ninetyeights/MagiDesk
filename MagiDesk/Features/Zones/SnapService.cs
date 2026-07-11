@@ -45,8 +45,36 @@ internal static class SnapService
         var wp = new WINDOWPLACEMENT { length = (uint)Marshal.SizeOf<WINDOWPLACEMENT>() };
         if (GetWindowPlacement(hwnd, ref wp))
         {
+            // SetWindowPlacement's rcNormalPosition is interpreted relative to
+            // the work-area origin of the monitor the window lands on, NOT in
+            // raw screen coordinates. So we must subtract that monitor's
+            // work-area inset (rcWork - rcMonitor) before writing it.
+            //
+            // The inset must come from the TARGET monitor, not the primary.
+            // Earlier this used SPI_GETWORKAREA (primary only): correct for
+            // primary-monitor windows, but once a top/left taskbar OR an AppBar
+            // (the Profile Dock in taskbar mode) insets the PRIMARY work area,
+            // that same offset was wrongly subtracted from windows snapped on a
+            // SECONDARY monitor — shifting them up (blank below, clipped above).
+            // Using the target monitor's own inset fixes the secondary monitor
+            // while staying identical on the primary (whose origin is (0,0), so
+            // rcWork - rcMonitor equals the old SPI_GETWORKAREA top-left).
+            int wsdx = 0, wsdy = 0;
+            var mon = MonitorFromRect(ref target, MONITOR_DEFAULTTONEAREST);
+            var mi  = new MONITORINFOEX { cbSize = Marshal.SizeOf<MONITORINFOEX>() };
+            if (GetMonitorInfo(mon, ref mi))
+            {
+                wsdx = mi.rcWork.Left - mi.rcMonitor.Left;
+                wsdy = mi.rcWork.Top  - mi.rcMonitor.Top;
+            }
             wp.showCmd          = 1 /*SW_SHOWNORMAL*/;
-            wp.rcNormalPosition = target;
+            wp.rcNormalPosition = new RECT
+            {
+                Left   = target.Left   - wsdx,
+                Top    = target.Top    - wsdy,
+                Right  = target.Right  - wsdx,
+                Bottom = target.Bottom - wsdy,
+            };
             SetWindowPlacement(hwnd, ref wp);
         }
         else

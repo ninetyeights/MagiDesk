@@ -70,6 +70,13 @@ internal sealed class AltDragger : IDisposable
     /// <summary>Fired on the UI thread when the Alt+LMB move drag ends.</summary>
     public event Action? MoveDragEnded;
 
+    /// <summary>Optional live-snap transform applied to the proposed window
+    /// rectangle during a MOVE drag, right before SetWindowPos. Returns the
+    /// adjusted rect (same size; only the position may change). Set by
+    /// EdgeSnapEngine; null = no snapping. Runs on the hook thread, so it must
+    /// be cheap — it reads a per-drag snapshot, not live enumeration.</summary>
+    public Func<RECT, RECT>? MoveSnap;
+
     public void Start() => _hook.Install();
 
     /// <summary>
@@ -296,6 +303,15 @@ internal sealed class AltDragger : IDisposable
 
             if (w < MinSize) { if (_resizeEdge is HTLEFT or HTTOPLEFT or HTBOTTOMLEFT) x -= MinSize - w; w = MinSize; }
             if (h < MinSize) { if (_resizeEdge is HTTOP  or HTTOPLEFT or HTTOPRIGHT)   y -= MinSize - h; h = MinSize; }
+        }
+
+        // Live edge snapping (move only — size stays fixed while moving). The
+        // engine returns the position aligned to a nearby monitor/window edge.
+        if (isMove && MoveSnap is { } snap)
+        {
+            var adj = snap(new RECT { Left = x, Top = y, Right = x + w, Bottom = y + h });
+            x = adj.Left;
+            y = adj.Top;
         }
 
         if (_hasLast && x == _lastX && y == _lastY && w == _lastW && h == _lastH) return;

@@ -7,7 +7,12 @@
     <Application.Resources>
         <ResourceDictionary>
             <ResourceDictionary.MergedDictionaries>
-                <ui:ThemesDictionary Theme="Light"/>
+                <!-- ThemesDictionary is inserted at index 0 from App.OnStartup
+                     based on the current Windows light/dark setting. We avoid
+                     declaring it here with a hard-coded Theme because once a
+                     Light dictionary has merged at InitializeComponent time,
+                     swapping its Source later doesn't reliably re-trigger
+                     DynamicResource lookups already resolved by ControlsDictionary. -->
                 <ui:ControlsDictionary/>
             </ResourceDictionary.MergedDictionaries>
 

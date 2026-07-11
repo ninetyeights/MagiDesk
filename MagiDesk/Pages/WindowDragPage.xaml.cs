@@ -40,8 +40,16 @@ namespace MagiDesk.Pages
             ResizeAlt.IsChecked  = (cfg.ResizeModMask & MOD_ALT)  != 0;
             ResizeWin.IsChecked  = (cfg.ResizeModMask & MOD_WIN)  != 0;
 
+            TsEdgeSnap.IsChecked        = cfg.EdgeSnapEnabled;
+            EdgeSnapBandSlider.Value    = cfg.EdgeSnapBand;
+            TxtEdgeSnapBand.Text        = cfg.EdgeSnapBand + " px";
+            TsSnapMonitor.IsChecked     = cfg.EdgeSnapToMonitorEdges;
+            TsSnapWindowEdges.IsChecked = cfg.EdgeSnapToWindowEdges;
+            TsSnapWindowAlign.IsChecked = cfg.EdgeSnapToWindowAlign;
+
             RefreshHints();
             RefreshEnabledUi();
+            RefreshEdgeSnapUi();
             _loading = false;
         }
 
@@ -125,6 +133,42 @@ namespace MagiDesk.Pages
                 : "功能已关闭，鼠标事件不会被拦截";
             SettingsGroup.Opacity   = on ? 1.0 : 0.45;
             SettingsGroup.IsEnabled = on;
+        }
+
+        // ---------------------------------------------------------- edge snap
+
+        private void EdgeSnap_Changed(object sender, RoutedEventArgs e)
+        {
+            if (_loading) return;
+            AppConfig.Current.EdgeSnapEnabled = TsEdgeSnap.IsChecked == true;
+            AppConfig.Current.Save();
+            RefreshEdgeSnapUi();
+        }
+
+        private void EdgeSnapBand_Changed(object sender, RoutedPropertyChangedEventArgs<double> e)
+        {
+            if (_loading || TxtEdgeSnapBand is null) return;
+            int v = (int)e.NewValue;
+            AppConfig.Current.EdgeSnapBand = v;
+            AppConfig.Current.Save();
+            TxtEdgeSnapBand.Text = v + " px";
+        }
+
+        private void EdgeSnapTarget_Changed(object sender, RoutedEventArgs e)
+        {
+            if (_loading) return;
+            var cfg = AppConfig.Current;
+            cfg.EdgeSnapToMonitorEdges = TsSnapMonitor.IsChecked == true;
+            cfg.EdgeSnapToWindowEdges  = TsSnapWindowEdges.IsChecked == true;
+            cfg.EdgeSnapToWindowAlign  = TsSnapWindowAlign.IsChecked == true;
+            cfg.Save();
+        }
+
+        private void RefreshEdgeSnapUi()
+        {
+            bool on = AppConfig.Current.EdgeSnapEnabled;
+            EdgeSnapBody.Opacity   = on ? 1.0 : 0.45;
+            EdgeSnapBody.IsEnabled = on;
         }
     }
 }

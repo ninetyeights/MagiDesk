@@ -1,15 +1,17 @@
 using System.IO;
 using System.Text.RegularExpressions;
+using MagiDesk.Features.BrowserBadges;
 
 namespace MagiDesk.Features.ProfileDock;
 
 /// <summary>
-/// Finds the Chrome .lnk shortcut for a given profile directory. Chrome (and
-/// Windows) create these shortcuts when the user pins a profile to the taskbar
-/// or opts into the "create desktop shortcut" prompt. Launching the .lnk
-/// instead of <c>chrome.exe</c> directly carries the AUMID embedded in the
-/// shortcut — which is what makes taskbar-pinned profile clicks launch fast
-/// without the "not responding" freeze we see on a bare command-line launch.
+/// Finds the browser .lnk shortcut for a given (browser, profile directory)
+/// pair. Chromium browsers (and Windows) create these shortcuts when the user
+/// pins a profile to the taskbar or opts into the "create desktop shortcut"
+/// prompt. Launching the .lnk instead of the exe directly carries the AUMID
+/// embedded in the shortcut — which is what makes taskbar-pinned profile clicks
+/// launch fast without the "not responding" freeze we see on a bare
+/// command-line launch.
 /// </summary>
 internal static class ChromeShortcutFinder
 {
@@ -32,11 +34,14 @@ internal static class ChromeShortcutFinder
         Environment.GetFolderPath(Environment.SpecialFolder.Desktop),
     };
 
-    public static string? Find(string profileDir)
+    public static string? Find(BrowserInfo browser, string profileDir)
     {
+        // Cache key is browser-qualified so two browsers' "Default" don't
+        // collide. A bare chrome.exe / msedge.exe shortcut means Default.
+        string cacheKey = $"{browser.Id}:{profileDir}";
         lock (_lock)
         {
-            if (_cache.TryGetValue(profileDir, out var cached)) return cached;
+            if (_cache.TryGetValue(cacheKey, out var cached)) return cached;
         }
 
         string? found = null;
@@ -49,9 +54,9 @@ internal static class ChromeShortcutFinder
                 {
                     var info = ReadLnk(lnk);
                     if (info is not { TargetPath: var tp, Arguments: var args }) continue;
-                    if (!tp.EndsWith("chrome.exe", StringComparison.OrdinalIgnoreCase)) continue;
-                    if (ExtractProfileDir(args) is string d
-                        && string.Equals(d, profileDir, StringComparison.OrdinalIgnoreCase))
+                    if (!tp.EndsWith(browser.ExeName, StringComparison.OrdinalIgnoreCase)) continue;
+                    string d = ExtractProfileDir(args) ?? "Default";
+                    if (string.Equals(d, profileDir, StringComparison.OrdinalIgnoreCase))
                     {
                         found = lnk;
                         break;
@@ -62,7 +67,7 @@ internal static class ChromeShortcutFinder
             if (found is not null) break;
         }
 
-        lock (_lock) { _cache[profileDir] = found; }
+        lock (_lock) { _cache[cacheKey] = found; }
         return found;
     }
 

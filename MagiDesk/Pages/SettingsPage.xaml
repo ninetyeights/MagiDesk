@@ -1,0 +1,76 @@
+<Page x:Class="MagiDesk.Pages.SettingsPage"
+      xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+      xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+      xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+      Title="设置">
+
+    <ScrollViewer Background="Transparent"
+                  VerticalScrollBarVisibility="Auto"
+                  HorizontalScrollBarVisibility="Disabled"
+                  Padding="0">
+        <Grid Margin="16,16,20,16">
+            <StackPanel HorizontalAlignment="Stretch" MaxWidth="1000">
+
+                <TextBlock Text="设置"
+                           FontSize="28" FontWeight="SemiBold"
+                           Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                <TextBlock Text="通用应用选项。"
+                           Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                           Margin="0,2,0,20"/>
+
+                <ui:Card HorizontalAlignment="Stretch" Padding="18,16" Margin="0,0,0,12">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                            <TextBlock Text="开机自启" FontWeight="SemiBold"
+                                       Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                            <TextBlock Text="登录 Windows 时自动启动 MagiDesk（仅当前用户）"
+                                       FontSize="12"
+                                       Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                       Margin="0,2,0,0"/>
+                        </StackPanel>
+                        <ui:ToggleSwitch x:Name="TsAutoStart"
+                                         Grid.Column="1"
+                                         VerticalAlignment="Center"
+                                         Checked="AutoStart_Changed"
+                                         Unchecked="AutoStart_Changed"/>
+                    </Grid>
+                </ui:Card>
+
+                <ui:Card HorizontalAlignment="Stretch" Padding="18,16" Margin="0,0,0,12">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                            <TextBlock Text="显示系统托盘图标" FontWeight="SemiBold"
+                                       Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                            <TextBlock x:Name="TxtTraySub"
+                                       FontSize="12"
+                                       Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                       Margin="0,2,0,0"/>
+                        </StackPanel>
+                        <ui:ToggleSwitch x:Name="TsTray"
+                                         Grid.Column="1"
+                                         VerticalAlignment="Center"
+                                         Checked="Tray_Changed"
+                                         Unchecked="Tray_Changed"/>
+                    </Grid>
+                </ui:Card>
+
+                <ui:InfoBar HorizontalAlignment="Stretch"
+                            IsOpen="True"
+                            IsClosable="False"
+                            Severity="Informational"
+                            Title="关闭托盘图标后"
+                            Message="点击主窗口右上角的关闭按钮会直接退出应用，而不是隐藏到托盘。"
+                            Margin="0,4,0,0"/>
+
+            </StackPanel>
+        </Grid>
+    </ScrollViewer>
+</Page>

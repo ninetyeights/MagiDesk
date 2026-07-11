@@ -30,6 +30,12 @@ internal sealed class ZonesEngine : IDisposable
     private POINT  _dragStartCursor;
     private (ZoneOverlayWindow overlay, ZoneSelection selection)? _currentHover;
     private bool _overlaysShown;
+    // Set when AppConfig changes (e.g. the user edits/saves a layout or reassigns
+    // a monitor). Forces the next idle PollTick to drop the cached overlays so
+    // the following Shift+drag rebuilds from the CURRENT layout. Without it,
+    // overlays are built once and reused forever — edits never apply, so windows
+    // snap to the stale layout's (wrong-sized) zones.
+    private bool _layoutDirty;
 
     // Pending restore: captured at DragStart but actually applied on first
     // real cursor movement. Restoring synchronously during MOVESIZESTART lets
@@ -41,7 +47,14 @@ internal sealed class ZonesEngine : IDisposable
 
     // hwnd → rect memory moved into SnapMemory (shared with QuickGrid).
 
-    public ZonesEngine(Dispatcher ui) { _ui = ui; _proc = OnWinEvent; }
+    public ZonesEngine(Dispatcher ui)
+    {
+        _ui = ui; _proc = OnWinEvent;
+        AppConfig.Changed += OnConfigChanged;
+    }
+
+    private void OnConfigChanged()
+        => _ui.BeginInvoke(new Action(() => _layoutDirty = true));
 
     public void Start()
     {
@@ -78,6 +91,7 @@ internal sealed class ZonesEngine : IDisposable
 
     public void Dispose()
     {
+        AppConfig.Changed -= OnConfigChanged;
         if (_hookStart != IntPtr.Zero) { UnhookWinEvent(_hookStart); _hookStart = IntPtr.Zero; }
         if (_hookEnd   != IntPtr.Zero) { UnhookWinEvent(_hookEnd);   _hookEnd   = IntPtr.Zero; }
         TeardownOverlays();
@@ -305,6 +319,15 @@ internal sealed class ZonesEngine : IDisposable
 
     private void PollTick()
     {
+        // Layout changed since the overlays were cached — drop them while idle
+        // so the next Shift+drag rebuilds from the current layout. Skip mid-drag
+        // (overlays shown) to avoid yanking a window the user is interacting with.
+        if (_layoutDirty && !_overlaysShown)
+        {
+            TeardownOverlays();
+            _layoutDirty = false;
+        }
+
         bool shiftDown = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
         if (!shiftDown)
         {

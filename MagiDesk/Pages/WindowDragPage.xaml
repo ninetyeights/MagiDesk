@@ -2,7 +2,8 @@
       xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
       xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
       xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
-      Title="窗口拖动">
+      Title="窗口拖动"
+      x:Name="PageRoot">
     <Page.Resources>
         <!-- macOS-style modifier keycap: rounded square button with accent
              border + subtle fill when checked. -->
@@ -53,6 +54,7 @@
     </Page.Resources>
 
     <ScrollViewer Background="Transparent"
+                  MaxHeight="{Binding ActualHeight, ElementName=PageRoot}"
                   VerticalScrollBarVisibility="Auto"
                   HorizontalScrollBarVisibility="Disabled"
                   Padding="0">
@@ -165,6 +167,84 @@
                                  Content="3×3 九宫格（角 + 边，中心默认右下角）"
                                  Margin="0,4"
                                  Checked="ResizeMode_Changed"/>
+                </StackPanel>
+            </ui:Card>
+
+            <!-- Edge snap (magnetic snapping during a move drag) -->
+            <ui:Card HorizontalAlignment="Stretch" Padding="18,16" Margin="0,0,0,12">
+                <StackPanel>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                            <TextBlock Text="边缘吸附（磁吸）" FontWeight="SemiBold"/>
+                            <TextBlock Text="移动窗口时，边缘靠近显示器边、其他窗口边或对齐线会实时吸附。仅在移动拖动时生效，缩放不受影响。"
+                                       FontSize="12"
+                                       Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                       TextWrapping="Wrap"
+                                       Margin="0,2,8,0"/>
+                        </StackPanel>
+                        <ui:ToggleSwitch x:Name="TsEdgeSnap" Grid.Column="1"
+                                         VerticalAlignment="Center"
+                                         Checked="EdgeSnap_Changed" Unchecked="EdgeSnap_Changed"/>
+                    </Grid>
+
+                    <StackPanel x:Name="EdgeSnapBody" Margin="0,14,0,0">
+                        <!-- Snap distance -->
+                        <Grid Margin="0,0,0,12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                <TextBlock Text="吸附距离"/>
+                                <TextBlock Text="边缘进入这个像素范围内就吸附。"
+                                           FontSize="12"
+                                           Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                           Margin="0,2,0,0"/>
+                            </StackPanel>
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                <Slider x:Name="EdgeSnapBandSlider" Width="180" Minimum="4" Maximum="40"
+                                        IsSnapToTickEnabled="True" TickFrequency="2"
+                                        ValueChanged="EdgeSnapBand_Changed"/>
+                                <TextBlock x:Name="TxtEdgeSnapBand" Margin="10,0,0,0" VerticalAlignment="Center" Width="46"/>
+                            </StackPanel>
+                        </Grid>
+
+                        <!-- Targets -->
+                        <Grid Margin="0,0,0,10">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="显示器工作区边缘" VerticalAlignment="Center"/>
+                            <ui:ToggleSwitch x:Name="TsSnapMonitor" Grid.Column="1"
+                                             VerticalAlignment="Center"
+                                             Checked="EdgeSnapTarget_Changed" Unchecked="EdgeSnapTarget_Changed"/>
+                        </Grid>
+                        <Grid Margin="0,0,0,10">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="其他窗口外边缘（贴合）" VerticalAlignment="Center"/>
+                            <ui:ToggleSwitch x:Name="TsSnapWindowEdges" Grid.Column="1"
+                                             VerticalAlignment="Center"
+                                             Checked="EdgeSnapTarget_Changed" Unchecked="EdgeSnapTarget_Changed"/>
+                        </Grid>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="相邻窗口对齐线（边 / 中线）" VerticalAlignment="Center"/>
+                            <ui:ToggleSwitch x:Name="TsSnapWindowAlign" Grid.Column="1"
+                                             VerticalAlignment="Center"
+                                             Checked="EdgeSnapTarget_Changed" Unchecked="EdgeSnapTarget_Changed"/>
+                        </Grid>
+                    </StackPanel>
                 </StackPanel>
             </ui:Card>
 

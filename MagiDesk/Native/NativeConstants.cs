@@ -42,7 +42,8 @@ internal static class NativeConstants
     public const uint GA_ROOT = 2;
 
     // ShowWindow
-    public const int SW_RESTORE = 9;
+    public const int SW_MINIMIZE = 6;
+    public const int SW_RESTORE  = 9;
 
     // Hit-test codes used as wParam for WM_NCLBUTTONDOWN
     public const int HTCAPTION    = 2;

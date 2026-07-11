@@ -91,6 +91,12 @@ namespace MagiDesk
             App.Tray?.HookMainWindow(this);
             RootNavigation.Navigate(typeof(WindowDragPage));
 
+            // Track Windows light/dark switches at runtime. Initial theme is
+            // already applied in App.OnStartup; this just keeps the window in
+            // sync if the user flips the system setting while we're running.
+            try { SystemThemeWatcher.Watch(this, WindowBackdropType.Mica, updateAccents: true); }
+            catch { }
+
             // Zero out ANY Frame / ContentPresenter margin/padding in the
             // NavigationView tree. The WPF-UI template adds a ~24 px Fluent
             // gutter somewhere we couldn't catch via resource keys alone.

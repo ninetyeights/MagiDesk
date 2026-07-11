@@ -1,6 +1,7 @@
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
@@ -18,25 +19,40 @@ public partial class BrowserBadgesPage : Page
     // fired during Maximum coerce before TxtSize is instantiated) are no-ops.
     private bool _loading = true;
 
+    // Per-profile-key live status indicators (dot + label), so WindowsChanged
+    // can repaint open/foreground state without rebuilding the whole row list.
+    private readonly Dictionary<string, (System.Windows.Shapes.Ellipse Dot, TextBlock Label)> _statusByKey = new();
+
+    // Current profile-list search filter (matched against name / browser /
+    // directory). Empty = show all.
+    private string _search = string.Empty;
+
     public BrowserBadgesPage()
     {
         InitializeComponent();
         PullToggles();
         AppConfig.Changed += OnConfigChanged;
-        Unloaded += (_, _) => AppConfig.Changed -= OnConfigChanged;
-        Loaded += (_, _) =>
+        if (App.BrowserBadges is not null)
+            App.BrowserBadges.WindowsChanged += OnBrowserWindowsChanged;
+        Unloaded += (_, _) =>
         {
-            RebuildProfileList();
-            RebuildGroupsList();
+            AppConfig.Changed -= OnConfigChanged;
+            if (App.BrowserBadges is not null)
+                App.BrowserBadges.WindowsChanged -= OnBrowserWindowsChanged;
         };
+        Loaded += (_, _) => RebuildProfileList();
     }
+
+    /// <summary>Badge service reported a browser window / foreground change.
+    /// Repaint just the status dots — cheap, no row rebuild.</summary>
+    private void OnBrowserWindowsChanged()
+        => Dispatcher.BeginInvoke(new Action(RefreshStatuses));
 
     private void OnConfigChanged()
         => Dispatcher.BeginInvoke(new Action(() =>
         {
             PullToggles();
             RebuildProfileList();
-            RebuildGroupsList();
         }));
 
     private void PullToggles()
@@ -46,10 +62,7 @@ public partial class BrowserBadgesPage : Page
         TsEnabled.IsChecked  = cfg.BrowserBadgeEnabled;
         TsShowName.IsChecked = cfg.BrowserBadgeShowName;
         TsFirstWord.IsChecked = cfg.BrowserBadgeFirstWordOnly;
-        TsDock.IsChecked      = cfg.BrowserDockEnabled;
         TsUnlocked.IsChecked = cfg.BrowserBadgeUnlocked;
-        CmbSeparator.SelectedIndex = (int)cfg.BrowserDockSeparator;
-        TsHideUngrouped.IsChecked  = cfg.BrowserDockHideUngrouped;
         SizeSlider.Value     = cfg.BrowserBadgeHeight;
         TxtSize.Text         = cfg.BrowserBadgeHeight + " px";
         BodyGroup.Opacity    = cfg.BrowserBadgeEnabled ? 1.0 : 0.5;
@@ -89,13 +102,6 @@ public partial class BrowserBadgesPage : Page
         AppConfig.Current.Save();
     }
 
-    private void Dock_Changed(object sender, RoutedEventArgs e)
-    {
-        if (_loading) return;
-        AppConfig.Current.BrowserDockEnabled = TsDock.IsChecked == true;
-        AppConfig.Current.Save();
-    }
-
     private void Unlocked_Changed(object sender, RoutedEventArgs e)
     {
         if (_loading) return;
@@ -121,20 +127,138 @@ public partial class BrowserBadgesPage : Page
     private void RebuildProfileList()
     {
         ProfileList.Children.Clear();
+        _statusByKey.Clear();
         var profiles = App.BrowserBadges?.Profiles
                     ?? Features.BrowserBadges.ChromeProfileCatalog.LoadAll();
-        TxtEmpty.Visibility = profiles.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+
+        // Apply the search filter (name / browser / directory / key).
+        var filtered = string.IsNullOrEmpty(_search)
+            ? (IReadOnlyList<ChromeProfile>)profiles
+            : profiles.Where(p => MatchesSearch(p, _search)).ToList();
+
+        if (profiles.Count == 0)
+        {
+            TxtEmpty.Text = "没找到浏览器 profile。请确认 Chrome / Edge / Brave / Vivaldi 等已安装并至少启动过一次。";
+            TxtEmpty.Visibility = Visibility.Visible;
+        }
+        else if (filtered.Count == 0)
+        {
+            TxtEmpty.Text = $"没有匹配“{_search}”的 profile。";
+            TxtEmpty.Visibility = Visibility.Visible;
+        }
+        else
+        {
+            TxtEmpty.Visibility = Visibility.Collapsed;
+        }
 
         var cfg = AppConfig.Current;
-        foreach (var p in profiles)
+        // Profiles arrive grouped by browser (catalog iterates BrowserInfo.All
+        // in order). Emit a section header each time the browser changes so the
+        // list reads as one block per browser instead of an undivided mix.
+        BrowserInfo? lastBrowser = null;
+        foreach (var p in filtered)
         {
-            if (!cfg.BrowserProfiles.TryGetValue(p.Directory, out var s))
+            if (!cfg.BrowserProfiles.TryGetValue(p.Key, out var s))
             {
                 s = new BrowserProfileSettings();
-                cfg.BrowserProfiles[p.Directory] = s;
+                cfg.BrowserProfiles[p.Key] = s;
+            }
+            if (!ReferenceEquals(lastBrowser, p.Browser))
+            {
+                int count = filtered.Count(x => x.Browser.Kind == p.Browser.Kind);
+                ProfileList.Children.Add(BuildBrowserHeader(p.Browser, count, isFirst: lastBrowser is null));
+                lastBrowser = p.Browser;
             }
             ProfileList.Children.Add(BuildRow(p, s));
         }
+        RefreshStatuses();
+    }
+
+    private void Search_Changed(object sender, TextChangedEventArgs e)
+    {
+        if (TxtSearch is null) return;
+        _search = TxtSearch.Text?.Trim() ?? string.Empty;
+        RebuildProfileList();
+    }
+
+    /// <summary>Case-insensitive match of a profile against the search query
+    /// across its display name, browser name, profile directory, and key.</summary>
+    private static bool MatchesSearch(ChromeProfile p, string q)
+    {
+        return Contains(p.Name)
+            || Contains(p.Browser.DisplayName)
+            || Contains(p.Directory)
+            || Contains(p.Key);
+
+        bool Contains(string? s)
+            => !string.IsNullOrEmpty(s) && s.Contains(q, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>Recompute and repaint every row's open / foreground status from
+    /// the badge service's cached window set. Mirrors the dock's logic: a
+    /// profile is "foreground" if its window is the current foreground HWND,
+    /// "open" if it has any tracked window, else "not open". When the badge
+    /// service is unavailable every profile reads as not open.</summary>
+    private void RefreshStatuses()
+    {
+        if (_statusByKey.Count == 0) return;
+        var cache = App.BrowserBadges?.CachedProfileWindows().ToList()
+                    ?? new List<(IntPtr, string)>();
+        var fgHwnd = MagiDesk.Native.NativeMethods.GetForegroundWindow();
+        var fgKey  = cache.FirstOrDefault(t => t.Item1 == fgHwnd).Item2;
+
+        foreach (var (key, ctrl) in _statusByKey)
+        {
+            bool hasWin = cache.Any(t => string.Equals(t.Item2, key, StringComparison.OrdinalIgnoreCase));
+            bool isFg   = fgKey is not null && string.Equals(fgKey, key, StringComparison.OrdinalIgnoreCase);
+            SetStatus(ctrl.Dot, ctrl.Label, hasWin, isFg);
+        }
+    }
+
+    /// <summary>Paint a single status indicator. Foreground (最前) = filled
+    /// green; open-but-background (已打开) = amber; not open (未打开) = grey.</summary>
+    private static void SetStatus(System.Windows.Shapes.Ellipse dot, TextBlock label, bool hasWin, bool isFg)
+    {
+        Color color; string text;
+        if (isFg)        { color = Color.FromRgb(0x2E, 0xA0, 0x43); text = "最前"; }
+        else if (hasWin) { color = Color.FromRgb(0xD2, 0x99, 0x22); text = "已打开"; }
+        else             { color = Color.FromRgb(0x80, 0x80, 0x80); text = "未打开"; }
+        dot.Fill = new SolidColorBrush(color);
+        label.Text = text;
+        label.Foreground = new SolidColorBrush(color);
+    }
+
+    /// <summary>Section header separating one browser's profile rows from the
+    /// next. A bottom border gives a clear divider; non-first headers get extra
+    /// top margin so each browser block breathes.</summary>
+    private static FrameworkElement BuildBrowserHeader(BrowserInfo browser, int count, bool isFirst)
+    {
+        var header = new Border
+        {
+            BorderThickness = new Thickness(0, 0, 0, 1),
+            Padding = new Thickness(0, 0, 0, 6),
+            Margin  = new Thickness(0, isFirst ? 0 : 14, 0, 8),
+        };
+        header.SetResourceReference(Border.BorderBrushProperty, "CardStrokeColorDefaultBrush");
+
+        var row = new StackPanel { Orientation = Orientation.Horizontal };
+        row.Children.Add(new TextBlock
+        {
+            Text = browser.DisplayName,
+            FontWeight = FontWeights.SemiBold,
+            FontSize = 15,
+            VerticalAlignment = VerticalAlignment.Center,
+        });
+        var countText = new TextBlock
+        {
+            Text = $"   ·   {count} 个 profile",
+            FontSize = 12,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        countText.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorSecondaryBrush");
+        row.Children.Add(countText);
+        header.Child = row;
+        return header;
     }
 
     private FrameworkElement BuildRow(ChromeProfile profile, BrowserProfileSettings settings)
@@ -148,13 +272,6 @@ public partial class BrowserBadgesPage : Page
         border.SetResourceReference(Border.BackgroundProperty, "ControlFillColorDefaultBrush");
         border.SetResourceReference(Border.BorderBrushProperty, "CardStrokeColorDefaultBrush");
         border.BorderThickness = new Thickness(1);
-
-        // Drag source: any press outside an interactive widget (Button,
-        // ToggleSwitch, TextBox, ComboBox) initiates a drag carrying this
-        // profile's directory. The row becomes a generously-sized drag
-        // handle; drops onto a group card or chip update the profile's
-        // group assignment.
-        AttachProfileDragSource(border, profile.Directory);
 
         var row = new Grid();
         border.Child = row;
@@ -188,14 +305,105 @@ public partial class BrowserBadgesPage : Page
         Grid.SetColumn(avatarHost, 0);
         row.Children.Add(avatarHost);
 
+        // --- Custom avatar image: drag an image onto the preview, paste from
+        // the clipboard (Ctrl+V or right-click), or pick a file. All three
+        // funnel into ApplyAvatarImage. ------------------------------------
+        void ChooseAvatarFile()
+        {
+            var ofd = new OpenFileDialog
+            {
+                Title  = "选择头像图片",
+                Filter = "图片 (*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.webp)|*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.webp",
+            };
+            if (ofd.ShowDialog() == true)
+                ApplyAvatarImage(profile, settings, ofd.FileName, null, RefreshAvatar);
+        }
+        void PasteAvatar()
+        {
+            if (!TryPasteAvatarFromClipboard(profile, settings, RefreshAvatar))
+                System.Windows.MessageBox.Show(
+                    "剪贴板里没有图片。先复制一张图片，或改用拖拽 / 选择文件。",
+                    "粘贴头像", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        void ClearAvatarImage()
+        {
+            var old = settings.CustomAvatarPath;
+            if (string.IsNullOrEmpty(old)) return;
+            settings.CustomAvatarPath = null;
+            AppConfig.Current.BrowserProfiles[profile.Key] = settings;
+            AppConfig.Current.Save();
+            TryDeleteAvatarFile(old);
+            RefreshAvatar();
+        }
+
+        avatarHost.AllowDrop = true;
+        avatarHost.Focusable = true;
+        avatarHost.Cursor    = Cursors.Hand;
+        avatarHost.ToolTip   = "拖入图片设为头像；或点击后按 Ctrl+V 粘贴，右键有更多选项";
+        avatarHost.MouseLeftButtonDown += (_, _) => avatarHost.Focus();
+        avatarHost.DragOver += (_, e) =>
+        {
+            // Only claim image drags — let profile-reorder drags bubble to the row.
+            if (HasDroppableImage(e.Data))
+            {
+                e.Effects = DragDropEffects.Copy;
+                e.Handled = true;
+            }
+        };
+        avatarHost.Drop += (_, e) =>
+        {
+            if (!HasDroppableImage(e.Data)) return;
+            var (path, bmp) = ExtractImage(e.Data);
+            if (path is not null || bmp is not null)
+                ApplyAvatarImage(profile, settings, path, bmp, RefreshAvatar);
+            e.Handled = true;
+        };
+        avatarHost.KeyDown += (_, e) =>
+        {
+            if (e.Key == Key.V && (Keyboard.Modifiers & ModifierKeys.Control) != 0)
+            {
+                PasteAvatar();
+                e.Handled = true;
+            }
+        };
+        var avatarMenu = new ContextMenu();
+        var miPaste = new MenuItem { Header = "从剪贴板粘贴 (Ctrl+V)" };
+        miPaste.Click += (_, _) => PasteAvatar();
+        var miFile = new MenuItem { Header = "从文件选择…" };
+        miFile.Click += (_, _) => ChooseAvatarFile();
+        var miClear = new MenuItem { Header = "清除头像图片" };
+        miClear.Click += (_, _) => ClearAvatarImage();
+        avatarMenu.Items.Add(miPaste);
+        avatarMenu.Items.Add(miFile);
+        avatarMenu.Items.Add(new Separator());
+        avatarMenu.Items.Add(miClear);
+        avatarHost.ContextMenu = avatarMenu;
+
         // Name + directory
         var names = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(10, 0, 10, 0) };
         Grid.SetColumn(names, 1);
         row.Children.Add(names);
         names.Children.Add(new TextBlock { Text = profile.Name, FontWeight = FontWeights.SemiBold });
-        var dirText = new TextBlock { Text = profile.Directory, FontSize = 11 };
+        var dirText = new TextBlock { Text = $"{profile.Browser.DisplayName} · {profile.Directory}", FontSize = 11 };
         dirText.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorSecondaryBrush");
         names.Children.Add(dirText);
+
+        // Live status row: a colored dot + label showing whether this profile
+        // currently has open windows and whether one is the foreground window.
+        // RefreshStatuses repaints these without rebuilding the row.
+        var statusRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 4, 0, 0) };
+        var statusDot = new Ellipse
+        {
+            Width = 8, Height = 8,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 5, 0),
+        };
+        var statusLabel = new TextBlock { FontSize = 11, VerticalAlignment = VerticalAlignment.Center };
+        statusRow.Children.Add(statusDot);
+        statusRow.Children.Add(statusLabel);
+        names.Children.Add(statusRow);
+        _statusByKey[profile.Key] = (statusDot, statusLabel);
+        SetStatus(statusDot, statusLabel, hasWin: false, isFg: false);
 
         // Color swatch button
         var colorBtn = new Button
@@ -219,7 +427,7 @@ public partial class BrowserBadgesPage : Page
             if (dlg.ShowDialog() == System.Windows.Forms.DialogResult.OK)
             {
                 settings.ColorHex = $"#{dlg.Color.R:X2}{dlg.Color.G:X2}{dlg.Color.B:X2}";
-                AppConfig.Current.BrowserProfiles[profile.Directory] = settings;
+                AppConfig.Current.BrowserProfiles[profile.Key] = settings;
                 AppConfig.Current.Save();
                 UpdateColorSwatch(colorBtn, profile, settings);
             }
@@ -244,7 +452,7 @@ public partial class BrowserBadgesPage : Page
             };
             if (dlg.ShowDialog() == true)
             {
-                AppConfig.Current.BrowserProfiles[profile.Directory] = settings;
+                AppConfig.Current.BrowserProfiles[profile.Key] = settings;
                 AppConfig.Current.Save();
                 RefreshAvatar();
             }
@@ -271,12 +479,12 @@ public partial class BrowserBadgesPage : Page
                         ?? Features.BrowserBadges.ChromeProfileCatalog.LoadAll();
             foreach (var other in profiles)
             {
-                if (other.Directory.Equals(profile.Directory, StringComparison.OrdinalIgnoreCase)) continue;
-                var mi = new MenuItem { Header = $"{other.Name} ({other.Directory})" };
-                string targetDir = other.Directory;
+                if (other.Key.Equals(profile.Key, StringComparison.OrdinalIgnoreCase)) continue;
+                var mi = new MenuItem { Header = $"{other.Name} · {other.Browser.DisplayName} ({other.Directory})" };
+                string targetKey = other.Key;
                 mi.Click += (_, _) =>
                 {
-                    CopyAvatarSettings(settings, targetDir);
+                    CopyAvatarSettings(settings, targetKey);
                 };
                 menu.Items.Add(mi);
             }
@@ -284,31 +492,32 @@ public partial class BrowserBadgesPage : Page
             menu.IsOpen = true;
         };
 
-        // Upload avatar image (highest priority).
+        // Avatar image (highest priority). Paste from clipboard or pick a file;
+        // dragging an image onto the preview on the left does the same.
         var uploadBtn = new Wpf.Ui.Controls.Button
         {
-            Content = "上传头像",
+            Content = "头像图片",
             Padding = new Thickness(12, 4, 12, 4),
             Margin  = new Thickness(0, 0, 6, 0),
             VerticalAlignment = VerticalAlignment.Center,
+            ToolTip = "粘贴剪贴板图片、选择文件，或直接把图片拖到左侧头像上",
         };
         Grid.SetColumn(uploadBtn, 5);
         row.Children.Add(uploadBtn);
         uploadBtn.Click += (_, _) =>
         {
-            var ofd = new OpenFileDialog
+            var menu = new ContextMenu
             {
-                Title  = "选择头像图片",
-                Filter = "图片 (*.png;*.jpg;*.jpeg;*.bmp)|*.png;*.jpg;*.jpeg;*.bmp",
+                Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom,
+                PlacementTarget = uploadBtn,
             };
-            if (ofd.ShowDialog() == true)
-            {
-                string dst = SaveAvatarCopy(profile.Directory, ofd.FileName);
-                settings.CustomAvatarPath = dst;
-                AppConfig.Current.BrowserProfiles[profile.Directory] = settings;
-                AppConfig.Current.Save();
-                RefreshAvatar();
-            }
+            var paste = new MenuItem { Header = "从剪贴板粘贴 (Ctrl+V)" };
+            paste.Click += (_, _) => PasteAvatar();
+            var file = new MenuItem { Header = "从文件选择…" };
+            file.Click += (_, _) => ChooseAvatarFile();
+            menu.Items.Add(paste);
+            menu.Items.Add(file);
+            menu.IsOpen = true;
         };
 
         // Reset avatar / color
@@ -329,7 +538,7 @@ public partial class BrowserBadgesPage : Page
             settings.AvatarText = null;
             settings.AvatarBgHex = null;
             settings.AvatarTextColorHex = null;
-            AppConfig.Current.BrowserProfiles[profile.Directory] = settings;
+            AppConfig.Current.BrowserProfiles[profile.Key] = settings;
             AppConfig.Current.Save();
             UpdateColorSwatch(colorBtn, profile, settings);
             RefreshAvatar();
@@ -343,8 +552,8 @@ public partial class BrowserBadgesPage : Page
         };
         Grid.SetColumn(vis, 7);
         row.Children.Add(vis);
-        vis.Checked   += (_, _) => { settings.Visible = true;  AppConfig.Current.BrowserProfiles[profile.Directory] = settings; AppConfig.Current.Save(); };
-        vis.Unchecked += (_, _) => { settings.Visible = false; AppConfig.Current.BrowserProfiles[profile.Directory] = settings; AppConfig.Current.Save(); };
+        vis.Checked   += (_, _) => { settings.Visible = true;  AppConfig.Current.BrowserProfiles[profile.Key] = settings; AppConfig.Current.Save(); };
+        vis.Unchecked += (_, _) => { settings.Visible = false; AppConfig.Current.BrowserProfiles[profile.Key] = settings; AppConfig.Current.Save(); };
 
         return border;
     }
@@ -362,13 +571,13 @@ public partial class BrowserBadgesPage : Page
     /// and <see cref="BrowserProfileSettings.Visible"/> untouched. The
     /// uploaded image path is shared by reference — both profiles point to
     /// the same file on disk.</summary>
-    private static void CopyAvatarSettings(BrowserProfileSettings source, string targetDir)
+    private static void CopyAvatarSettings(BrowserProfileSettings source, string targetKey)
     {
         var cfg = AppConfig.Current;
-        if (!cfg.BrowserProfiles.TryGetValue(targetDir, out var target))
+        if (!cfg.BrowserProfiles.TryGetValue(targetKey, out var target))
         {
             target = new BrowserProfileSettings();
-            cfg.BrowserProfiles[targetDir] = target;
+            cfg.BrowserProfiles[targetKey] = target;
         }
         target.AvatarText         = source.AvatarText;
         target.AvatarBgHex        = source.AvatarBgHex;
@@ -507,336 +716,119 @@ public partial class BrowserBadgesPage : Page
         catch { brush = null!; return false; }
     }
 
-    private static string SaveAvatarCopy(string profileDir, string sourcePath)
-    {
-        string appDir = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-            "MagiDesk", "avatars");
-        Directory.CreateDirectory(appDir);
-        string safe = string.Concat(profileDir.Select(ch => char.IsLetterOrDigit(ch) ? ch : '_'));
-        string dst = Path.Combine(appDir, safe + Path.GetExtension(sourcePath));
-        File.Copy(sourcePath, dst, overwrite: true);
-        return dst;
-    }
+    private static readonly string AvatarDir = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+        "MagiDesk", "avatars");
 
-    // ====================================================== dock groups
-
-    private void NewGroup_Click(object sender, RoutedEventArgs e)
+    /// <summary>Persist a dragged / pasted / picked image as this profile's
+    /// custom avatar, then refresh. <paramref name="filePath"/> is used for
+    /// file drops and the file picker; <paramref name="bitmap"/> for clipboard
+    /// or in-memory image drags (encoded to PNG). Writes a uniquely-named file
+    /// so WPF's per-URI <see cref="BitmapImage"/> cache never serves a stale
+    /// picture, and deletes the previous avatar file.</summary>
+    private static bool ApplyAvatarImage(ChromeProfile profile, BrowserProfileSettings settings,
+                                         string? filePath, BitmapSource? bitmap, Action refreshAvatar)
     {
-        var cfg = AppConfig.Current;
-        cfg.BrowserDockGroups.Add(new BrowserDockGroup { Name = $"分组 {cfg.BrowserDockGroups.Count + 1}" });
-        cfg.Save();
-    }
+        string dst;
+        try
+        {
+            Directory.CreateDirectory(AvatarDir);
+            if (filePath is not null && File.Exists(filePath))
+            {
+                string ext = Path.GetExtension(filePath);
+                if (string.IsNullOrEmpty(ext)) ext = ".png";
+                dst = NewAvatarPath(profile.Key, ext);
+                File.Copy(filePath, dst, overwrite: true);
+            }
+            else if (bitmap is not null)
+            {
+                dst = NewAvatarPath(profile.Key, ".png");
+                var encoder = new PngBitmapEncoder();
+                encoder.Frames.Add(BitmapFrame.Create(bitmap));
+                using var fs = new FileStream(dst, FileMode.Create, FileAccess.Write);
+                encoder.Save(fs);
+            }
+            else return false;
+        }
+        catch { return false; }
 
-    private void Separator_Changed(object sender, RoutedEventArgs e)
-    {
-        if (_loading) return;
-        AppConfig.Current.BrowserDockSeparator = (DockGroupSeparator)System.Math.Max(0, CmbSeparator.SelectedIndex);
+        var old = settings.CustomAvatarPath;
+        settings.CustomAvatarPath = dst;
+        AppConfig.Current.BrowserProfiles[profile.Key] = settings;
         AppConfig.Current.Save();
+        TryDeleteAvatarFile(old);
+        refreshAvatar();
+        return true;
     }
 
-    private void HideUngrouped_Changed(object sender, RoutedEventArgs e)
+    private static string NewAvatarPath(string profileKey, string ext)
     {
-        if (_loading) return;
-        AppConfig.Current.BrowserDockHideUngrouped = TsHideUngrouped.IsChecked == true;
-        AppConfig.Current.Save();
+        string safe = string.Concat(profileKey.Select(ch => char.IsLetterOrDigit(ch) ? ch : '_'));
+        return Path.Combine(AvatarDir, $"{safe}_{Guid.NewGuid():N}{ext}");
     }
 
-    private void RebuildGroupsList()
+    /// <summary>Delete a previous avatar file, but only if it lives under our
+    /// managed avatars folder (never touch a path the user pointed elsewhere).</summary>
+    private static void TryDeleteAvatarFile(string? path)
     {
-        GroupsList.Children.Clear();
-        var cfg = AppConfig.Current;
-        var profiles = App.BrowserBadges?.Profiles
-                    ?? Features.BrowserBadges.ChromeProfileCatalog.LoadAll();
-
-        for (int i = 0; i < cfg.BrowserDockGroups.Count; i++)
+        if (string.IsNullOrEmpty(path)) return;
+        try
         {
-            var grp = cfg.BrowserDockGroups[i];
-            GroupsList.Children.Add(BuildGroupRow(grp, profiles));
+            var full = Path.GetFullPath(path);
+            if (full.StartsWith(Path.GetFullPath(AvatarDir), StringComparison.OrdinalIgnoreCase)
+                && File.Exists(full))
+                File.Delete(full);
         }
+        catch { }
     }
 
-    private FrameworkElement BuildGroupRow(BrowserDockGroup grp, IReadOnlyList<ChromeProfile> allProfiles)
+    private static bool TryPasteAvatarFromClipboard(ChromeProfile profile,
+                                                    BrowserProfileSettings settings, Action refreshAvatar)
     {
-        var border = new Border
+        try
         {
-            CornerRadius    = new CornerRadius(6),
-            Padding         = new Thickness(10),
-            Margin          = new Thickness(0, 0, 0, 8),
-            BorderThickness = new Thickness(1),
-            AllowDrop       = true,
-        };
-        border.SetResourceReference(Border.BackgroundProperty, "ControlFillColorDefaultBrush");
-        border.SetResourceReference(Border.BorderBrushProperty, "CardStrokeColorDefaultBrush");
-
-        // Drop target: accept a dragged profile directory and add it to
-        // this group (removing from any previous group first).
-        border.DragEnter += (_, e) =>
-        {
-            if (e.Data.GetDataPresent("MagiDeskProfileDir")) e.Effects = DragDropEffects.Move;
-            else e.Effects = DragDropEffects.None;
-            e.Handled = true;
-        };
-        border.Drop += (_, e) =>
-        {
-            if (!e.Data.GetDataPresent("MagiDeskProfileDir")) return;
-            var dir = (string)e.Data.GetData("MagiDeskProfileDir");
-            // Group-level drop = append. Chip-level drop (which sets Handled)
-            // would have beaten us to the event for a positional reorder.
-            MoveProfileIntoGroup(dir, grp, -1);
-            e.Handled = true;
-        };
-
-        var stack = new StackPanel();
-        border.Child = stack;
-
-        // Top row: up/down reorder + name editor + delete button.
-        var top = new Grid();
-        top.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        top.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        top.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        top.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-
-        var upBtn = new Button
-        {
-            Content = "↑", Width = 28, Height = 28,
-            Padding = new Thickness(0),
-            Margin  = new Thickness(0, 0, 2, 0),
-            ToolTip = "上移分组",
-            VerticalAlignment = VerticalAlignment.Center,
-        };
-        Grid.SetColumn(upBtn, 0);
-        top.Children.Add(upBtn);
-        upBtn.Click += (_, _) =>
-        {
-            var list = AppConfig.Current.BrowserDockGroups;
-            int idx = list.IndexOf(grp);
-            if (idx <= 0) return;
-            list.RemoveAt(idx);
-            list.Insert(idx - 1, grp);
-            AppConfig.Current.Save();
-        };
-
-        var downBtn = new Button
-        {
-            Content = "↓", Width = 28, Height = 28,
-            Padding = new Thickness(0),
-            Margin  = new Thickness(0, 0, 8, 0),
-            ToolTip = "下移分组",
-            VerticalAlignment = VerticalAlignment.Center,
-        };
-        Grid.SetColumn(downBtn, 1);
-        top.Children.Add(downBtn);
-        downBtn.Click += (_, _) =>
-        {
-            var list = AppConfig.Current.BrowserDockGroups;
-            int idx = list.IndexOf(grp);
-            if (idx < 0 || idx >= list.Count - 1) return;
-            list.RemoveAt(idx);
-            list.Insert(idx + 1, grp);
-            AppConfig.Current.Save();
-        };
-
-        var nameBox = new TextBox
-        {
-            Text = grp.Name,
-            Margin = new Thickness(0, 0, 8, 0),
-            VerticalContentAlignment = VerticalAlignment.Center,
-            Height = 32,
-        };
-        nameBox.LostFocus += (_, _) =>
-        {
-            if (grp.Name == nameBox.Text) return;
-            grp.Name = nameBox.Text;
-            AppConfig.Current.Save();
-        };
-        Grid.SetColumn(nameBox, 2);
-        top.Children.Add(nameBox);
-
-        var deleteBtn = new Wpf.Ui.Controls.Button
-        {
-            Content = "删除分组",
-            Padding = new Thickness(10, 4, 10, 4),
-            VerticalAlignment = VerticalAlignment.Center,
-        };
-        deleteBtn.Click += (_, _) =>
-        {
-            AppConfig.Current.BrowserDockGroups.Remove(grp);
-            AppConfig.Current.Save();
-        };
-        Grid.SetColumn(deleteBtn, 3);
-        top.Children.Add(deleteBtn);
-        stack.Children.Add(top);
-
-        // Member chips + add button.
-        var chips = new WrapPanel { Margin = new Thickness(0, 10, 0, 0) };
-        for (int chipIdx = 0; chipIdx < grp.ProfileDirs.Count; chipIdx++)
-        {
-            string dir = grp.ProfileDirs[chipIdx];
-            int dropIndex = chipIdx; // capture for closure
-            var p = allProfiles.FirstOrDefault(
-                x => x.Directory.Equals(dir, StringComparison.OrdinalIgnoreCase));
-            string label = p?.Name ?? dir;
-            var chip = BuildChip(label, removeLabel: "×", removeAction: () =>
+            if (System.Windows.Clipboard.ContainsImage())
             {
-                grp.ProfileDirs.Remove(dir);
-                AppConfig.Current.Save();
-            });
-
-            // Chip drags: reorder within a group or move to another group.
-            AttachProfileDragSource(chip, dir);
-
-            // Chip as drop target: dropping onto a chip inserts the dragged
-            // profile at that chip's position (reorder).
-            chip.AllowDrop = true;
-            chip.DragEnter += (_, e) =>
+                var bmp = System.Windows.Clipboard.GetImage();
+                if (bmp is not null && ApplyAvatarImage(profile, settings, null, bmp, refreshAvatar))
+                    return true;
+            }
+            if (System.Windows.Clipboard.ContainsFileDropList())
             {
-                if (e.Data.GetDataPresent("MagiDeskProfileDir")) e.Effects = DragDropEffects.Move;
-                else e.Effects = DragDropEffects.None;
-                e.Handled = true;
-            };
-            chip.Drop += (_, e) =>
-            {
-                if (!e.Data.GetDataPresent("MagiDeskProfileDir")) return;
-                var draggedDir = (string)e.Data.GetData("MagiDeskProfileDir");
-                MoveProfileIntoGroup(draggedDir, grp, dropIndex);
-                e.Handled = true; // stop it bubbling to the group-level drop (which would append)
-            };
-
-            chips.Children.Add(chip);
+                foreach (var f in System.Windows.Clipboard.GetFileDropList())
+                    if (f is not null && IsImageFile(f)
+                        && ApplyAvatarImage(profile, settings, f, null, refreshAvatar))
+                        return true;
+            }
         }
-
-        // "+ Add profile" button: dropdown of profiles not yet in this group.
-        var addBtn = new Wpf.Ui.Controls.Button
-        {
-            Content = "+ 添加 profile",
-            Padding = new Thickness(10, 4, 10, 4),
-            Margin = new Thickness(0, 0, 6, 6),
-        };
-        var addMenu = new ContextMenu();
-        foreach (var p in allProfiles)
-        {
-            if (grp.ProfileDirs.Contains(p.Directory, StringComparer.OrdinalIgnoreCase)) continue;
-            var mi = new MenuItem { Header = $"{p.Name} ({p.Directory})" };
-            string dir = p.Directory;
-            mi.Click += (_, _) =>
-            {
-                // If profile was in another group, remove it first (one-group rule).
-                foreach (var other in AppConfig.Current.BrowserDockGroups)
-                    other.ProfileDirs.RemoveAll(d => d.Equals(dir, StringComparison.OrdinalIgnoreCase));
-                grp.ProfileDirs.Add(dir);
-                AppConfig.Current.Save();
-            };
-            addMenu.Items.Add(mi);
-        }
-        addBtn.Click += (_, _) =>
-        {
-            if (addMenu.Items.Count == 0) return;
-            addMenu.PlacementTarget = addBtn;
-            addMenu.IsOpen = true;
-        };
-        chips.Children.Add(addBtn);
-
-        stack.Children.Add(chips);
-        return border;
-    }
-
-    /// <summary>Wire up drag-source behavior on <paramref name="handle"/>.
-    /// Press anywhere that isn't an interactive control, move past the
-    /// system threshold, and a <c>MagiDeskProfileDir</c> data object with
-    /// <paramref name="profileDir"/> starts the drag.</summary>
-    private static void AttachProfileDragSource(FrameworkElement handle, string profileDir)
-    {
-        Point dragStart = default;
-        bool mouseDown = false;
-        handle.PreviewMouseLeftButtonDown += (_, e) =>
-        {
-            // Allow drag from any non-interactive area — textboxes, buttons,
-            // toggles, comboboxes eat the press themselves so we never see it.
-            // The Original Source lets us still skip things like the chip's
-            // close "×" which is a Button.
-            if (IsInteractive(e.OriginalSource as DependencyObject)) return;
-            mouseDown = true;
-            dragStart = e.GetPosition(handle);
-        };
-        handle.PreviewMouseMove += (_, e) =>
-        {
-            if (!mouseDown || e.LeftButton != System.Windows.Input.MouseButtonState.Pressed) return;
-            var cur = e.GetPosition(handle);
-            if (System.Math.Abs(cur.X - dragStart.X) < SystemParameters.MinimumHorizontalDragDistance &&
-                System.Math.Abs(cur.Y - dragStart.Y) < SystemParameters.MinimumVerticalDragDistance) return;
-            mouseDown = false;
-            var data = new DataObject("MagiDeskProfileDir", profileDir);
-            DragDrop.DoDragDrop(handle, data, DragDropEffects.Move);
-        };
-        handle.PreviewMouseLeftButtonUp += (_, _) => mouseDown = false;
-    }
-
-    /// <summary>True if the source of a mouse event is an interactive
-    /// control (Button / ToggleSwitch / TextBox / ComboBox / ScrollBar) —
-    /// those should eat the press and not start a drag.</summary>
-    private static bool IsInteractive(DependencyObject? node)
-    {
-        while (node is not null)
-        {
-            if (node is Button || node is System.Windows.Controls.Primitives.ToggleButton
-                || node is TextBox || node is ComboBox
-                || node is System.Windows.Controls.Primitives.ScrollBar
-                || node is System.Windows.Controls.Primitives.Thumb)
-                return true;
-            node = System.Windows.Media.VisualTreeHelper.GetParent(node);
-        }
+        catch { }
         return false;
     }
 
-    /// <summary>Move <paramref name="dir"/> into <paramref name="targetGroup"/>
-    /// at <paramref name="index"/>, first removing it from any previous
-    /// group (including targetGroup if it was already there). Index clamps
-    /// to the group's bounds. Passing -1 means "append to the end".</summary>
-    private static void MoveProfileIntoGroup(string dir, BrowserDockGroup targetGroup, int index)
+    private static bool HasDroppableImage(IDataObject d)
     {
-        if (string.IsNullOrEmpty(dir)) return;
-        foreach (var g in AppConfig.Current.BrowserDockGroups)
-            g.ProfileDirs.RemoveAll(d => d.Equals(dir, StringComparison.OrdinalIgnoreCase));
-        if (index < 0 || index > targetGroup.ProfileDirs.Count)
-            targetGroup.ProfileDirs.Add(dir);
-        else
-            targetGroup.ProfileDirs.Insert(index, dir);
-        AppConfig.Current.Save();
+        if (d.GetDataPresent(DataFormats.Bitmap)) return true;
+        if (d.GetDataPresent(DataFormats.FileDrop) && d.GetData(DataFormats.FileDrop) is string[] files)
+            return files.Any(IsImageFile);
+        return false;
     }
 
-    private static FrameworkElement BuildChip(string label, string removeLabel, Action removeAction)
+    private static (string? path, BitmapSource? bmp) ExtractImage(IDataObject d)
     {
-        var chip = new Border
+        if (d.GetDataPresent(DataFormats.FileDrop) && d.GetData(DataFormats.FileDrop) is string[] files)
         {
-            CornerRadius    = new CornerRadius(12),
-            Padding         = new Thickness(10, 4, 4, 4),
-            Margin          = new Thickness(0, 0, 6, 6),
-            BorderThickness = new Thickness(1),
-        };
-        chip.SetResourceReference(Border.BackgroundProperty, "ControlFillColorSecondaryBrush");
-        chip.SetResourceReference(Border.BorderBrushProperty, "ControlStrokeColorDefaultBrush");
-
-        var row = new StackPanel { Orientation = Orientation.Horizontal };
-        chip.Child = row;
-        row.Children.Add(new TextBlock
-        {
-            Text = label,
-            VerticalAlignment = VerticalAlignment.Center,
-            Margin = new Thickness(0, 0, 6, 0),
-        });
-        var closeBtn = new Button
-        {
-            Content = removeLabel,
-            Width = 20, Height = 20,
-            Padding = new Thickness(0),
-            VerticalAlignment = VerticalAlignment.Center,
-            Background = System.Windows.Media.Brushes.Transparent,
-            BorderThickness = new Thickness(0),
-            Cursor = System.Windows.Input.Cursors.Hand,
-        };
-        closeBtn.Click += (_, _) => removeAction();
-        row.Children.Add(closeBtn);
-        return chip;
+            var img = files.FirstOrDefault(IsImageFile);
+            if (img is not null) return (img, null);
+        }
+        if (d.GetDataPresent(DataFormats.Bitmap) && d.GetData(DataFormats.Bitmap) is BitmapSource bs)
+            return (null, bs);
+        return (null, null);
     }
+
+    private static bool IsImageFile(string path)
+    {
+        var ext = Path.GetExtension(path).ToLowerInvariant();
+        return ext is ".png" or ".jpg" or ".jpeg" or ".bmp" or ".gif" or ".webp";
+    }
+
 }

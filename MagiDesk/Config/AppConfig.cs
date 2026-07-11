@@ -41,9 +41,14 @@ public sealed class AppConfig
 
     // ---- Zones (FancyZones-style) ----------------------------------------
     public bool    ZonesEnabled        { get; set; } = true;
+    /// <summary>Default rows/columns for a brand-new layout in the editor.</summary>
     public int     ZonesRows           { get; set; } = 2;
     public int     ZonesColumns        { get; set; } = 2;
+    /// <summary>Gap (physical px) between zones in a default uniform grid.</summary>
     public int     ZonesSpacing        { get; set; } = 8;
+    /// <summary>Legacy single custom-zone list (pre-layout-profiles). Kept as a
+    /// fallback for old configs; new layouts live in <see cref="Layouts"/>.</summary>
+    public List<RelRect>? ZonesCustom  { get; set; } = null;
     /// <summary>
     /// When enabled, dragging a previously-snapped window WITHOUT Shift
     /// restores it to its pre-snap size (cursor stays on the title bar
@@ -56,25 +61,6 @@ public sealed class AppConfig
     /// the merge behavior. 14 is roughly a fingertip-width cushion at 100%
     /// scaling.</summary>
     public int     ZonesMergeBand      { get; set; } = 14;
-    /// <summary>
-    /// User-drawn custom layout as fractions of the work area. When set
-    /// (non-null, non-empty), overrides the rows/cols grid.
-    /// </summary>
-    public List<RelRect>? ZonesCustom  { get; set; } = null;
-    /// <summary>
-    /// Per-row heights as fractions (sum = 1). Legacy field from the old
-    /// grid editor — kept for migration only; new editor uses ZonesTree.
-    /// </summary>
-    public List<double>? ZonesRowPercents { get; set; } = null;
-    public List<double>? ZonesColPercents { get; set; } = null;
-
-    /// <summary>
-    /// Legacy single-layout tree. Kept for migration only: on first load
-    /// with this field set, we wrap it as a profile in <see cref="Layouts"/>
-    /// and clear this field. New writes go through <see cref="Layouts"/>.
-    /// </summary>
-    public LayoutNode? ZonesTree { get; set; } = null;
-    public int         ZonesTreeNextId { get; set; } = 0;
 
     // ---- Main window geometry --------------------------------------------
     /// <summary>Main window pixel bounds (virtual desktop coords). Null on
@@ -124,12 +110,31 @@ public sealed class AppConfig
 
     // ---- Profile dock (taskbar-like floating strip of Chrome profiles) ----
     public bool   BrowserDockEnabled    { get; set; } = true;
+    /// <summary>Floating (drag anywhere, free overlay) vs AppBar (taskbar-style
+    /// strip pinned to the top edge that reserves screen space). See
+    /// <see cref="DockMode"/>.</summary>
+    public DockMode BrowserDockMode     { get; set; } = DockMode.Floating;
     /// <summary>Size (DIPs) of each avatar button in the dock.</summary>
     public int    BrowserDockButtonSize { get; set; } = 36;
     /// <summary>Dock window position in DIPs. -1 = not yet positioned; the
-    /// service will center it on the primary work area.</summary>
+    /// service will center it on the primary work area. Only used by the
+    /// legacy single-monitor / "primary (auto)" path — explicit monitor
+    /// targets persist per-monitor device-pixel positions in
+    /// <see cref="BrowserDockMonitorPositions"/> instead.</summary>
     public double BrowserDockX { get; set; } = -1;
     public double BrowserDockY { get; set; } = -1;
+    /// <summary>Show the dock on a single monitor or on every monitor.</summary>
+    public DockMonitorMode BrowserDockMonitorMode { get; set; } = DockMonitorMode.Single;
+    /// <summary>In <see cref="DockMonitorMode.Single"/>, which monitor the dock
+    /// sits on — the monitor's <c>szDevice</c> (e.g. <c>\\.\DISPLAY1</c>). Null
+    /// (or an id that no longer resolves) falls back to the primary monitor and
+    /// keeps the legacy free-drag behavior via <see cref="BrowserDockX"/>/Y.</summary>
+    public string? BrowserDockMonitorId { get; set; } = null;
+    /// <summary>Per-monitor floating positions (device pixels) keyed by
+    /// <c>szDevice</c>. Used when the dock is pinned to an explicit monitor or
+    /// spans all monitors — each window remembers where it was dragged on its
+    /// own monitor. Missing entries default to centered along the top edge.</summary>
+    public Dictionary<string, DockPoint> BrowserDockMonitorPositions { get; set; } = new();
     /// <summary>Named profile groups. Profiles within a group render
     /// contiguously on the dock with a small gap separating groups.
     /// Profiles not in any group appear after all groups.</summary>
@@ -150,6 +155,13 @@ public sealed class AppConfig
     /// actions remain available — the lock only freezes layout, not function.</summary>
     public bool BrowserDockLocked { get; set; } = false;
 
+    // ---- General app settings --------------------------------------------
+    /// <summary>Show the system tray icon on startup. When off, closing the
+    /// main window exits the app instead of hiding to tray.</summary>
+    public bool TrayIconEnabled { get; set; } = true;
+    /// <summary>Launch MagiDesk automatically when Windows starts (HKCU Run key).</summary>
+    public bool AutoStartEnabled { get; set; } = false;
+
     // ---- Quick Grid (ad-hoc rows×cols picker via hotkey) -----------------
     public bool QuickGridEnabled          { get; set; } = true;
     public bool QuickGridRestoreOnDrag    { get; set; } = true;
@@ -165,6 +177,22 @@ public sealed class AppConfig
     /// <summary>Per-monitor rows×cols overrides. Key = monitor device name (szDevice).</summary>
     public Dictionary<string, QuickGridCells> QuickGridPerMonitor { get; set; } = new();
 
+    // ---- Edge snap (magnetic snapping during Alt-drag move) --------------
+    /// <summary>Master switch for live edge snapping while moving a window with
+    /// the Alt-drag (WindowDrag) modifier held.</summary>
+    public bool EdgeSnapEnabled        { get; set; } = true;
+    /// <summary>Snap distance in physical pixels: an edge within this many px of
+    /// a target line jumps to align with it.</summary>
+    public int  EdgeSnapBand           { get; set; } = 12;
+    /// <summary>Snap to each monitor's work-area edges (excludes taskbar / AppBars).</summary>
+    public bool EdgeSnapToMonitorEdges { get; set; } = true;
+    /// <summary>Snap the dragged window's edges flush against other windows'
+    /// opposite edges (right-to-left / bottom-to-top), so windows abut.</summary>
+    public bool EdgeSnapToWindowEdges  { get; set; } = true;
+    /// <summary>Snap so the dragged window's edges / center line up with other
+    /// windows' matching edges / centers (alignment without abutting).</summary>
+    public bool EdgeSnapToWindowAlign  { get; set; } = true;
+
     // ------------------------------------------------------------ singleton
 
     // NOTE: ConfigPath + JsonOpts must be declared BEFORE _current.
@@ -177,6 +205,12 @@ public sealed class AppConfig
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
         "MagiDesk",
         "config.json");
+    private static readonly string BackupPath = ConfigPath + ".bak";
+    private static readonly string TempPath   = ConfigPath + ".tmp";
+    private static readonly string BackupDir  = Path.Combine(
+        Path.GetDirectoryName(ConfigPath)!, "backups");
+    /// <summary>How many rolling daily snapshots to keep in <see cref="BackupDir"/>.</summary>
+    private const int KeepDailyBackups = 7;
 
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
@@ -192,41 +226,95 @@ public sealed class AppConfig
 
     private static AppConfig Load()
     {
-        try
+        var cfg = TryLoad(ConfigPath);
+        if (cfg is not null) return cfg;
+
+        // Primary unreadable (empty, half-written, or otherwise corrupt).
+        // Quarantine it BEFORE returning so the next Save() doesn't silently
+        // overwrite the evidence — that's exactly how we lost data once.
+        QuarantineCorrupt(ConfigPath);
+
+        cfg = TryLoad(BackupPath);
+        if (cfg is not null)
         {
-            if (File.Exists(ConfigPath))
-            {
-                var json = File.ReadAllText(ConfigPath);
-                var cfg = JsonSerializer.Deserialize<AppConfig>(json, JsonOpts);
-                if (cfg is not null)
-                {
-                    cfg.MigrateLegacy();
-                    Log($"LOAD ok Layouts={cfg.Layouts.Count} Assignments={cfg.MonitorAssignments.Count}");
-                    return cfg;
-                }
-                Log("LOAD null after deserialize");
-            }
-            else Log($"LOAD no file at {ConfigPath}");
+            try { File.Copy(BackupPath, ConfigPath, overwrite: true); }
+            catch (Exception ex) { Log($"LOAD restore from .bak copy failed: {ex.Message}"); }
+            Log("LOAD recovered from .bak");
+            return cfg;
         }
-        catch (Exception ex) { Log($"LOAD failed: {ex}"); }
+
+        Log("LOAD falling back to defaults — neither config.json nor .bak usable");
         return new AppConfig();
     }
 
-    /// <summary>
-    /// Fold the old single-layout fields (ZonesTree / ZonesCustom) into the
-    /// new profile library if they're present and no profiles exist yet.
-    /// </summary>
-    private void MigrateLegacy()
+    private static AppConfig? TryLoad(string path)
     {
-        if (Layouts.Count > 0 || ZonesTree is null) return;
-        Layouts.Add(new LayoutProfile
+        try
         {
-            Name   = "Custom 1",
-            Tree   = ZonesTree,
-            NextId = Math.Max(1, ZonesTreeNextId),
-        });
-        ZonesTree       = null;
-        ZonesTreeNextId = 0;
+            if (!File.Exists(path)) { Log($"LOAD no file at {Path.GetFileName(path)}"); return null; }
+            var json = File.ReadAllText(path);
+            if (string.IsNullOrWhiteSpace(json)) { Log($"LOAD empty {Path.GetFileName(path)}"); return null; }
+            var cfg = JsonSerializer.Deserialize<AppConfig>(json, JsonOpts);
+            if (cfg is null) { Log($"LOAD null after deserialize {Path.GetFileName(path)}"); return null; }
+            MigrateBrowserKeys(cfg);
+            Log($"LOAD ok {Path.GetFileName(path)} Layouts={cfg.Layouts.Count} Assignments={cfg.MonitorAssignments.Count}");
+            return cfg;
+        }
+        catch (Exception ex) { Log($"LOAD failed {Path.GetFileName(path)}: {ex.Message}"); return null; }
+    }
+
+    /// <summary>
+    /// Migrate browser-badge config from the original Chrome-only schema, where
+    /// profiles were keyed by their bare directory name ("Default", "Profile 1"),
+    /// to the multi-browser schema, where the key is browser-qualified
+    /// ("chrome:Default"). Any key/list entry that doesn't already contain a
+    /// ':' is assumed to be a legacy Chrome entry and gets the "chrome:" prefix.
+    /// Profile directory names never contain ':', so the check can't misfire,
+    /// and entries that are already qualified are left untouched (idempotent).
+    /// </summary>
+    private static void MigrateBrowserKeys(AppConfig cfg)
+    {
+        static string Q(string key) => key.Contains(':') ? key : "chrome:" + key;
+
+        bool changed = false;
+
+        if (cfg.BrowserProfiles.Count > 0 && cfg.BrowserProfiles.Keys.Any(k => !k.Contains(':')))
+        {
+            var migrated = new Dictionary<string, BrowserProfileSettings>();
+            foreach (var (key, value) in cfg.BrowserProfiles)
+                migrated[Q(key)] = value; // later duplicates win; collisions impossible here
+            cfg.BrowserProfiles = migrated;
+            changed = true;
+        }
+
+        foreach (var grp in cfg.BrowserDockGroups)
+        {
+            for (int i = 0; i < grp.ProfileDirs.Count; i++)
+            {
+                var q = Q(grp.ProfileDirs[i]);
+                if (q != grp.ProfileDirs[i]) { grp.ProfileDirs[i] = q; changed = true; }
+            }
+        }
+
+        for (int i = 0; i < cfg.BrowserDockUngroupedOrder.Count; i++)
+        {
+            var q = Q(cfg.BrowserDockUngroupedOrder[i]);
+            if (q != cfg.BrowserDockUngroupedOrder[i]) { cfg.BrowserDockUngroupedOrder[i] = q; changed = true; }
+        }
+
+        if (changed) Log("migrated browser-badge config keys to browser-qualified form");
+    }
+
+    private static void QuarantineCorrupt(string path)
+    {
+        try
+        {
+            if (!File.Exists(path)) return;
+            var dest = path + ".broken-" + DateTime.Now.ToString("yyyyMMdd-HHmmss");
+            File.Move(path, dest);
+            Log($"quarantined corrupt config → {Path.GetFileName(dest)}");
+        }
+        catch (Exception ex) { Log($"quarantine failed: {ex.Message}"); }
     }
 
     public void Save()
@@ -235,11 +323,54 @@ public sealed class AppConfig
         {
             Directory.CreateDirectory(Path.GetDirectoryName(ConfigPath)!);
             var json = JsonSerializer.Serialize(this, JsonOpts);
-            File.WriteAllText(ConfigPath, json);
+            // Atomic write: serialize into .tmp, then File.Replace swaps it
+            // into place and moves the previous good copy into .bak. If the
+            // process dies mid-write the half-written file is .tmp (ignored
+            // by Load), not config.json. The .bak file lets a future Load
+            // recover from a corrupted primary — see Load() above.
+            File.WriteAllText(TempPath, json);
+            if (File.Exists(ConfigPath))
+                File.Replace(TempPath, ConfigPath, BackupPath, ignoreMetadataErrors: true);
+            else
+                File.Move(TempPath, ConfigPath);
             Log($"SAVE ok Layouts={Layouts.Count} bytes={json.Length}");
+            RollDailyBackup();
         }
         catch (Exception ex) { Log($"SAVE failed: {ex}"); }
         try { Changed?.Invoke(); } catch { }
+    }
+
+    /// <summary>
+    /// On the first Save of each calendar day, copy the just-written config
+    /// into <c>backups/config-YYYYMMDD.json</c> and prune snapshots beyond
+    /// <see cref="KeepDailyBackups"/>. Fast on subsequent Save() calls — just
+    /// a File.Exists check — so the high-frequency settings UI doesn't churn
+    /// disk. Independent of <c>.bak</c>, which only ever holds the previous
+    /// version.
+    /// </summary>
+    private static void RollDailyBackup()
+    {
+        try
+        {
+            var today     = DateTime.Now.ToString("yyyyMMdd");
+            var todayPath = Path.Combine(BackupDir, $"config-{today}.json");
+            if (File.Exists(todayPath)) return;
+            Directory.CreateDirectory(BackupDir);
+            File.Copy(ConfigPath, todayPath);
+            Log($"daily backup → config-{today}.json");
+
+            // Filenames sort lexicographically by date thanks to yyyyMMdd, so
+            // descending == newest first; keep the top N, delete the rest.
+            var stale = Directory.GetFiles(BackupDir, "config-*.json")
+                                 .OrderByDescending(f => f)
+                                 .Skip(KeepDailyBackups);
+            foreach (var f in stale)
+            {
+                try { File.Delete(f); Log($"pruned old backup {Path.GetFileName(f)}"); }
+                catch (Exception ex) { Log($"prune {Path.GetFileName(f)} failed: {ex.Message}"); }
+            }
+        }
+        catch (Exception ex) { Log($"daily backup failed: {ex.Message}"); }
     }
 
     /// <summary>Fired after a successful save so any open settings page can

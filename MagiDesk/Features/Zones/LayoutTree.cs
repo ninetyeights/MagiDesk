@@ -214,6 +214,98 @@ public sealed class LayoutTree
         return found;
     }
 
+    /// <summary>
+    /// Rebuild the tree into its canonical guillotine form from the current
+    /// leaf rectangles: any line that cleanly spans a region (no leaf straddles
+    /// it) is hoisted to a single split at that region's level. This merges
+    /// aligned dividers from different branches into ONE divider that spans and
+    /// drags as a whole — e.g. after cutting two stacked zones at the same X,
+    /// the two cuts become a single full-height divider. Leaf ids and the
+    /// visible layout are preserved exactly; only the split grouping changes.
+    /// </summary>
+    /// <param name="prefer">Axis to hoist FIRST when a region can be cut both
+    /// ways (a grid). Pass the orientation of the cut just made so that divider
+    /// becomes the global (root-level) one; null keeps the default vertical-first.</param>
+    public void Canonicalize(SplitOrientation? prefer = null)
+    {
+        var leaves = new List<(int id, Rect r)>();
+        EnumerateLeaves(new Rect(0, 0, 1, 1), e => leaves.Add((e.Leaf.Id, e.Bounds)));
+        if (leaves.Count == 0) return;
+        Root = BuildCanonical(leaves, new Rect(0, 0, 1, 1), prefer);
+    }
+
+    private static LayoutNode BuildCanonical(List<(int id, Rect r)> rects, Rect region, SplitOrientation? prefer)
+    {
+        if (rects.Count == 1) return new ZoneLeaf { Id = rects[0].id };
+        bool firstVertical = prefer != SplitOrientation.Horizontal;
+        LayoutNode? node = TryCanonicalSplit(rects, region, firstVertical, prefer);
+        node ??= TryCanonicalSplit(rects, region, !firstVertical, prefer);
+        // Fallback for a non-guillotine arrangement (shouldn't arise from
+        // split/merge ops): keep one leaf rather than corrupt the tree.
+        return node ?? new ZoneLeaf { Id = rects[0].id };
+    }
+
+    private static SplitNode? TryCanonicalSplit(List<(int id, Rect r)> rects, Rect region, bool vertical, SplitOrientation? prefer)
+    {
+        const double eps = 1e-6;
+        double lo = vertical ? region.X : region.Y;
+        double hi = vertical ? region.X + region.Width : region.Y + region.Height;
+
+        static (double a, double b) Span(Rect r, bool v)
+            => v ? (r.X, r.X + r.Width) : (r.Y, r.Y + r.Height);
+
+        // Interior edges that no rect straddles = clean full-span cut positions.
+        var edges = new SortedSet<double>();
+        foreach (var (_, r) in rects)
+        {
+            var (a, b) = Span(r, vertical);
+            if (a > lo + eps && a < hi - eps) edges.Add(a);
+            if (b > lo + eps && b < hi - eps) edges.Add(b);
+        }
+        var cuts = new List<double>();
+        foreach (var x in edges)
+        {
+            bool straddle = false;
+            foreach (var (_, r) in rects)
+            {
+                var (a, b) = Span(r, vertical);
+                if (a < x - eps && b > x + eps) { straddle = true; break; }
+            }
+            if (!straddle) cuts.Add(x);
+        }
+        if (cuts.Count == 0) return null;
+
+        var bounds = new List<double> { lo };
+        bounds.AddRange(cuts);
+        bounds.Add(hi);
+
+        var children  = new List<LayoutNode>();
+        var fractions = new List<double>();
+        for (int i = 0; i < bounds.Count - 1; i++)
+        {
+            double a = bounds[i], b = bounds[i + 1];
+            var seg = new List<(int id, Rect r)>();
+            foreach (var t in rects)
+            {
+                var (ra, rb) = Span(t.r, vertical);
+                if (ra >= a - eps && rb <= b + eps) seg.Add(t);
+            }
+            if (seg.Count == 0) return null; // gap → not a valid partition
+            Rect sub = vertical
+                ? new Rect(a, region.Y, b - a, region.Height)
+                : new Rect(region.X, a, region.Width, b - a);
+            children.Add(BuildCanonical(seg, sub, prefer));
+            fractions.Add((b - a) / (hi - lo));
+        }
+        if (children.Count < 2) return null;
+        return new SplitNode
+        {
+            Orientation = vertical ? SplitOrientation.Vertical : SplitOrientation.Horizontal,
+            Children    = children,
+            Fractions   = fractions,
+        };
+    }
+
     public (SplitNode? parent, int idx) FindParent(int leafId)
     {
         (SplitNode?, int) found = (null, -1);

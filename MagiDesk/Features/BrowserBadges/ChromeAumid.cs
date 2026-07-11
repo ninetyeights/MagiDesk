@@ -23,27 +23,27 @@ namespace MagiDesk.Features.BrowserBadges;
 /// </summary>
 internal static class ChromeAumid
 {
-    public const string BaseAppId = "Chrome";
-
-    /// <summary>Primary current-Chrome formula. Returned by
+    /// <summary>Primary current-Chromium formula. Returned by
     /// <c>WindowAumid.Read</c> for every profile window observed on
-    /// recent installs (logged as <c>Chrome.UserData.&lt;slug&gt;</c>).</summary>
-    public static string Compute(string profileDir)
+    /// recent installs (logged as <c>&lt;Base&gt;.UserData.&lt;slug&gt;</c>).
+    /// <paramref name="browser"/> supplies the per-browser AUMID base
+    /// ("Chrome", "MSEdge", …).</summary>
+    public static string Compute(BrowserInfo browser, string profileDir)
     {
         if (string.Equals(profileDir, "Default", StringComparison.OrdinalIgnoreCase))
-            return BaseAppId;
+            return browser.AumidBase;
         string slug = profileDir.Replace(" ", string.Empty);
-        return $"{BaseAppId}.UserData.{slug}";
+        return $"{browser.AumidBase}.UserData.{slug}";
     }
 
-    /// <summary>Legacy formula kept for older Chrome builds and for
-    /// installations where taskbar pinning still uses the older AUMID. Both
-    /// values should be prepopulated into the AUMID cache.</summary>
-    public static string ComputeLegacy(string profileDir)
+    /// <summary>Legacy formula kept for older builds and for installations
+    /// where taskbar pinning still uses the older AUMID. Both values should be
+    /// prepopulated into the AUMID cache.</summary>
+    public static string ComputeLegacy(BrowserInfo browser, string profileDir)
     {
         if (string.Equals(profileDir, "Default", StringComparison.OrdinalIgnoreCase))
-            return BaseAppId;
+            return browser.AumidBase;
         string slug = profileDir.Replace(' ', '_');
-        return $"{BaseAppId}._crpwin{slug}";
+        return $"{browser.AumidBase}._crpwin{slug}";
     }
 }

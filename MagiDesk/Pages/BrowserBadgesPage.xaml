@@ -111,27 +111,6 @@
                     </Grid>
                 </ui:Card>
 
-                <!-- Profile dock (taskbar-like launcher) -->
-                <ui:Card HorizontalAlignment="Stretch" Padding="18,16" Margin="0,0,0,12">
-                    <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="Auto"/>
-                        </Grid.ColumnDefinitions>
-                        <StackPanel Grid.Column="0" VerticalAlignment="Center">
-                            <TextBlock Text="启用 Profile Dock" FontWeight="SemiBold"/>
-                            <TextBlock Text="桌面上悬浮一条按钮，每个 Chrome profile 一个头像；点击启动或切换到该 profile 的窗口。"
-                                       FontSize="12"
-                                       Foreground="{DynamicResource TextFillColorSecondaryBrush}"
-                                       TextWrapping="Wrap"
-                                       Margin="0,2,8,0"/>
-                        </StackPanel>
-                        <ui:ToggleSwitch x:Name="TsDock" Grid.Column="1"
-                                         VerticalAlignment="Center"
-                                         Checked="Dock_Changed" Unchecked="Dock_Changed"/>
-                    </Grid>
-                </ui:Card>
-
                 <!-- Position (drag to customize) -->
                 <ui:Card HorizontalAlignment="Stretch" Padding="18,16" Margin="0,0,0,12">
                     <Grid>
@@ -160,62 +139,6 @@
                     </Grid>
                 </ui:Card>
 
-                <!-- Dock groups -->
-                <ui:Card HorizontalAlignment="Stretch" Padding="18,16" Margin="0,0,0,12">
-                    <StackPanel>
-                        <Grid Margin="0,0,0,10">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*"/>
-                                <ColumnDefinition Width="Auto"/>
-                            </Grid.ColumnDefinitions>
-                            <StackPanel Grid.Column="0">
-                                <TextBlock Text="Dock 分组" FontWeight="SemiBold"/>
-                                <TextBlock Text="把几个 profile 归到一组，dock 上相邻组之间用指定样式分隔。"
-                                           FontSize="12"
-                                           Foreground="{DynamicResource TextFillColorSecondaryBrush}"
-                                           TextWrapping="Wrap"
-                                           Margin="0,2,0,0"/>
-                            </StackPanel>
-                            <ui:Button Grid.Column="1" Content="新建分组" Padding="12,6"
-                                       VerticalAlignment="Center"
-                                       Click="NewGroup_Click"/>
-                        </Grid>
-
-                        <!-- Separator style + hide-ungrouped -->
-                        <Grid Margin="0,0,0,10">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="Auto"/>
-                                <ColumnDefinition Width="200"/>
-                                <ColumnDefinition Width="*"/>
-                                <ColumnDefinition Width="Auto"/>
-                            </Grid.ColumnDefinitions>
-                            <TextBlock Grid.Column="0" Text="分隔样式"
-                                       VerticalAlignment="Center"
-                                       Margin="0,0,10,0"/>
-                            <ComboBox Grid.Column="1" x:Name="CmbSeparator"
-                                      Height="32"
-                                      VerticalContentAlignment="Center"
-                                      SelectionChanged="Separator_Changed">
-                                <ComboBoxItem Content="空隙"/>
-                                <ComboBoxItem Content="竖线"/>
-                                <ComboBoxItem Content="组名标签"/>
-                                <ComboBoxItem Content="半透边框"/>
-                            </ComboBox>
-                            <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center">
-                                <TextBlock Text="隐藏未分组"
-                                           VerticalAlignment="Center"
-                                           Margin="0,0,8,0"/>
-                                <ui:ToggleSwitch x:Name="TsHideUngrouped"
-                                                 VerticalAlignment="Center"
-                                                 Checked="HideUngrouped_Changed"
-                                                 Unchecked="HideUngrouped_Changed"/>
-                            </StackPanel>
-                        </Grid>
-
-                        <StackPanel x:Name="GroupsList"/>
-                    </StackPanel>
-                </ui:Card>
-
                 <!-- Profiles list -->
                 <ui:Card HorizontalAlignment="Stretch" Padding="18,16" Margin="0,0,0,12">
                     <StackPanel>
@@ -229,9 +152,13 @@
                             <ui:Button Grid.Column="1" Content="刷新" Padding="12,4"
                                        Click="Refresh_Click"/>
                         </Grid>
+                        <ui:TextBox x:Name="TxtSearch"
+                                    Margin="0,0,0,10"
+                                    PlaceholderText="搜索 profile（名称 / 浏览器 / 目录）"
+                                    TextChanged="Search_Changed"/>
                         <StackPanel x:Name="ProfileList"/>
                         <TextBlock x:Name="TxtEmpty"
-                                   Text="没找到 Chrome profile。请确认 Chrome 已安装并至少启动过一次。"
+                                   Text="没找到浏览器 profile。请确认 Chrome / Edge / Brave / Vivaldi 等已安装并至少启动过一次。"
                                    Foreground="{DynamicResource TextFillColorSecondaryBrush}"
                                    FontSize="12"
                                    Margin="0,8,0,0"

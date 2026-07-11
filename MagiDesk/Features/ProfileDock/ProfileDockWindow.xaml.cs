@@ -30,6 +30,17 @@ public partial class ProfileDockWindow : Window
     private NativeMethods.POINT _dragStartCursor;
     private int _dragStartWinX, _dragStartWinY;
 
+    // Topmost-reassert timer. WPF Topmost only sets HWND_TOPMOST once at HWND
+    // creation; other apps that periodically reassert their own topmost (Teams
+    // call window, media players, OBS, etc.) end up above us. Reasserting on a
+    // timer keeps the dock visibly on top in practice.
+    private System.Windows.Threading.DispatcherTimer? _topmostTimer;
+    private static readonly IntPtr HWND_TOPMOST = new(-1);
+    private const uint SWP_NOSIZE     = 0x0001;
+    private const uint SWP_NOMOVE     = 0x0002;
+    private const uint SWP_NOZORDER   = 0x0004;
+    private const uint SWP_NOACTIVATE = 0x0010;
+
     // Per-profile-directory reference to the state-indicator rectangle below
     // each button, so we can update width/opacity without rebuilding buttons.
     private readonly Dictionary<string, System.Windows.Shapes.Rectangle> _indicators = new();
@@ -39,6 +50,31 @@ public partial class ProfileDockWindow : Window
 
     /// <summary>Fired when the user clicks a profile button.</summary>
     public event Action<ChromeProfile>? ProfileClicked;
+
+    /// <summary>Floating vs AppBar. Must be set before <see cref="Window.Show"/>;
+    /// the service recreates the window when the user switches mode.</summary>
+    public DockMode Mode { get; set; } = DockMode.Floating;
+
+    // ---- Per-monitor targeting (set by the service before Show) ----------
+    /// <summary>The monitor (<c>szDevice</c>) this dock window belongs to. Used
+    /// to key the persisted floating position when <see cref="PerMonitorPosition"/>.</summary>
+    internal string? MonitorId { get; set; }
+    /// <summary>Target monitor work area in device pixels — where the window
+    /// seats itself and (in floating mode) centers along the top edge.</summary>
+    internal NativeMethods.RECT MonitorWorkAreaPx { get; set; }
+    /// <summary>When true this window is bound to a specific monitor: it seats
+    /// itself there via device-pixel SetWindowPos, and drags persist to
+    /// <see cref="AppConfig.BrowserDockMonitorPositions"/> keyed by
+    /// <see cref="MonitorId"/>. When false it keeps the legacy free-drag
+    /// behavior (position seeded from BrowserDockX/Y in DIPs by the service).</summary>
+    internal bool PerMonitorPosition { get; set; }
+    /// <summary>Saved device-pixel position for this monitor, if any. Null →
+    /// center along the work-area top edge. Only consulted when
+    /// <see cref="PerMonitorPosition"/>.</summary>
+    internal DockPoint? SavedPositionPx { get; set; }
+
+    private AppBarHost? _appBar;
+    private bool _appBarMode;
 
     public ProfileDockWindow()
     {
@@ -53,6 +89,185 @@ public partial class ProfileDockWindow : Window
         // NOACTIVATE keeps the dock from stealing focus when clicked;
         // TOOLWINDOW hides it from Alt-Tab.
         SetWindowLong(h, GWL_EXSTYLE, ex | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE);
+
+        // Monitor-bound windows seat themselves on the target monitor first, so
+        // the appbar's MonitorFromWindow resolves to the right screen and the
+        // floating placement below centers on the correct work area. The legacy
+        // (primary / free-drag) path keeps relying on the DIP Left/Top the
+        // service seeded before Show — don't disturb it.
+        if (PerMonitorPosition) SeatOnTargetMonitor(h);
+
+        if (Mode == DockMode.AppBar) EnableAppBarMode(h);
+        else if (PerMonitorPosition) Loaded += (_, _) => PlaceFloating(h);
+
+        _topmostTimer = new System.Windows.Threading.DispatcherTimer(
+            System.Windows.Threading.DispatcherPriority.Background)
+        {
+            Interval = TimeSpan.FromSeconds(3),
+        };
+        _topmostTimer.Tick += (_, _) => ReassertTopmost();
+        _topmostTimer.Start();
+    }
+
+    protected override void OnClosed(EventArgs e)
+    {
+        _topmostTimer?.Stop();
+        _topmostTimer = null;
+        // Release the reserved screen strip so other windows reclaim the space.
+        _appBar?.Remove();
+        _appBar = null;
+        base.OnClosed(e);
+    }
+
+    // ---------------------------------------------------------- AppBar (taskbar mode)
+
+    /// <summary>Turn the floating overlay into a taskbar-style appbar pinned to
+    /// the top edge: flush (no rounded corners), full monitor width with the
+    /// buttons centered, drag disabled, and a reserved strip the shell keeps
+    /// clear of maximized windows.</summary>
+    private void EnableAppBarMode(IntPtr h)
+    {
+        _appBarMode = true;
+
+        // Manual sizing — the appbar dictates the rect; SizeToContent would
+        // immediately shrink the window back to the buttons and break the
+        // full-width bar.
+        SizeToContent          = SizeToContent.Manual;
+        DockRoot.CornerRadius  = new CornerRadius(0);
+        DockRoot.BorderThickness = new Thickness(0, 0, 0, 1);
+        // Buttons sit in the middle of the full-width strip.
+        ButtonPanel.HorizontalAlignment = HorizontalAlignment.Center;
+
+        _appBar = new AppBarHost(h);
+        _appBar.Register();
+
+        // The shell posts appbar notifications to our HWND; forward POSCHANGED
+        // back into a reposition.
+        HwndSource.FromHwnd(h)?.AddHook(AppBarWndProc);
+
+        RepositionAppBar();
+    }
+
+    private IntPtr AppBarWndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+    {
+        if (_appBar is not null && msg == (int)_appBar.CallbackMessage)
+        {
+            if (wParam.ToInt32() == AppBarHost.ABN_POSCHANGED)
+                RepositionAppBar();
+            handled = true;
+        }
+        return IntPtr.Zero;
+    }
+
+    private void RepositionAppBar()
+    {
+        if (_appBar is null) return;
+        _appBar.Reposition(MeasureDockHeightPx());
+    }
+
+    /// <summary>Content height of the dock in device pixels — the strip height
+    /// we reserve. Driven by the avatar size + paddings so it tracks the
+    /// configured button size and separator style.</summary>
+    private int MeasureDockHeightPx()
+    {
+        DockRoot.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+        double dip = DockRoot.DesiredSize.Height;
+        if (dip <= 0) dip = AppConfig.Current.BrowserDockButtonSize + 24; // pre-measure fallback
+        var src = PresentationSource.FromVisual(this);
+        double scale = src?.CompositionTarget?.TransformToDevice.M22 ?? 1.0;
+        return (int)Math.Ceiling(dip * scale);
+    }
+
+    // ---------------------------------------------------------- per-monitor placement
+
+    /// <summary>Move the window onto its target monitor (top-left of the work
+    /// area) in device pixels, so MonitorFromWindow and the floating centering
+    /// resolve against the right screen. Size is left untouched.</summary>
+    private void SeatOnTargetMonitor(IntPtr h)
+    {
+        var wa = MonitorWorkAreaPx;
+        if (wa.Right <= wa.Left) return; // no target set — nothing to seat on
+        NativeMethods.SetWindowPos(h, IntPtr.Zero, wa.Left + 8, wa.Top + 8, 0, 0,
+            SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+
+    /// <summary>Position a monitor-bound floating dock in device pixels: restore
+    /// its saved per-monitor spot, or center it along the top edge of the
+    /// monitor's work area. Clamped to the work area so a stale saved position
+    /// (display rearranged / resolution changed) can't strand it off-screen.</summary>
+    private void PlaceFloating(IntPtr h)
+    {
+        if (_appBarMode) return; // the shell dictates the appbar rect
+        var wa = MonitorWorkAreaPx;
+        if (wa.Right <= wa.Left) return;
+
+        var src = PresentationSource.FromVisual(this);
+        double sx = src?.CompositionTarget?.TransformToDevice.M11 ?? 1.0;
+        double sy = src?.CompositionTarget?.TransformToDevice.M22 ?? 1.0;
+
+        // Content size in device pixels (ActualWidth is valid by Loaded time;
+        // fall back to a fresh measure if layout hasn't settled).
+        double wDip = ActualWidth  > 0 ? ActualWidth  : DockRoot.DesiredSize.Width;
+        double hDip = ActualHeight > 0 ? ActualHeight : DockRoot.DesiredSize.Height;
+        int wpx = (int)Math.Ceiling(wDip * sx);
+        int hpx = (int)Math.Ceiling(hDip * sy);
+
+        int x, y;
+        if (SavedPositionPx is { } p)
+        {
+            x = p.X; y = p.Y;
+        }
+        else
+        {
+            x = wa.Left + Math.Max(0, (wa.Right - wa.Left - wpx) / 2);
+            y = wa.Top  + (int)Math.Round(12 * sy);
+        }
+
+        // Keep the whole strip within the target monitor's work area.
+        x = Math.Max(wa.Left, Math.Min(x, wa.Right  - wpx));
+        y = Math.Max(wa.Top,  Math.Min(y, wa.Bottom - hpx));
+
+        NativeMethods.SetWindowPos(h, IntPtr.Zero, x, y, 0, 0,
+            SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+
+    private void ReassertTopmost()
+    {
+        // Skip while the user is dragging — a SetWindowPos call mid-drag would
+        // fight the live position update from Dock_MouseMove.
+        if (_dragging) return;
+        var h = new WindowInteropHelper(this).Handle;
+        if (h == IntPtr.Zero) return;
+        // Back off whenever a full-screen app owns the foreground (ShareX's
+        // capture overlay + its top toolbar, games, full-screen video, etc.).
+        // Re-asserting topmost here would yank the dock back above that overlay
+        // and cover its toolbar — exactly what the system taskbar avoids by
+        // staying below "rude" full-screen windows.
+        if (ForegroundIsFullscreen(h)) return;
+        // SWP_NOMOVE | SWP_NOSIZE — only touch Z-order. SWP_NOACTIVATE so the
+        // dock never takes focus when reasserting (matches WS_EX_NOACTIVATE).
+        NativeMethods.SetWindowPos(h, HWND_TOPMOST, 0, 0, 0, 0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    }
+
+    /// <summary>True when the foreground window (other than the dock itself)
+    /// fully covers its monitor — a full-screen overlay we must not climb over.
+    /// Excludes the desktop/shell so a bare desktop doesn't count.</summary>
+    private static bool ForegroundIsFullscreen(IntPtr self)
+    {
+        var fg = NativeMethods.GetForegroundWindow();
+        if (fg == IntPtr.Zero || fg == self) return false;
+        if (fg == NativeMethods.GetShellWindow() || fg == NativeMethods.GetDesktopWindow()) return false;
+        if (!NativeMethods.GetWindowRect(fg, out var wr)) return false;
+
+        var mon = NativeMethods.MonitorFromWindow(fg, NativeMethods.MONITOR_DEFAULTTONEAREST);
+        var mi  = new NativeMethods.MONITORINFOEX { cbSize = Marshal.SizeOf<NativeMethods.MONITORINFOEX>() };
+        if (!NativeMethods.GetMonitorInfo(mon, ref mi)) return false;
+        var m = mi.rcMonitor;
+
+        // Covers the whole monitor bounds (allow it to spill past the edges,
+        // as ShareX's virtual-screen overlay does).
+        return wr.Left <= m.Left && wr.Top <= m.Top && wr.Right >= m.Right && wr.Bottom >= m.Bottom;
     }
 
     /// <summary>Rebuild the buttons from the current profile catalog. Safe to
@@ -79,6 +294,9 @@ public partial class ProfileDockWindow : Window
             var groupContainer = BuildGroupContainer(name, members, buttonSize, separator, cfg);
             ButtonPanel.Children.Add(groupContainer);
         }
+
+        // Button size / group layout may have changed the strip height — re-reserve.
+        if (_appBarMode) RepositionAppBar();
     }
 
     private void AddSeparator(DockGroupSeparator style)
@@ -114,7 +332,7 @@ public partial class ProfileDockWindow : Window
         var row = new StackPanel { Orientation = Orientation.Horizontal };
         foreach (var p in members)
         {
-            var settings = cfg.BrowserProfiles.TryGetValue(p.Directory, out var s)
+            var settings = cfg.BrowserProfiles.TryGetValue(p.Key, out var s)
                 ? s : new BrowserProfileSettings();
             row.Children.Add(BuildProfileButton(p, settings, buttonSize));
         }
@@ -255,7 +473,7 @@ public partial class ProfileDockWindow : Window
             Visibility = Visibility.Hidden,
             Tag        = (double)size,  // stash full bar width for foreground state
         };
-        _indicators[p.Directory] = indicator;
+        _indicators[p.Key] = indicator;
 
         var stack = new StackPanel { Orientation = Orientation.Vertical };
         stack.Children.Add(host);
@@ -271,7 +489,7 @@ public partial class ProfileDockWindow : Window
             Background   = System.Windows.Media.Brushes.Transparent,
             Child        = stack,
         };
-        _buttonWrappers[p.Directory] = wrapper;
+        _buttonWrappers[p.Key] = wrapper;
 
         var btn = new Button
         {
@@ -281,13 +499,13 @@ public partial class ProfileDockWindow : Window
             BorderThickness = new Thickness(0),
             Background = System.Windows.Media.Brushes.Transparent,
             Cursor = Cursors.Hand,
-            ToolTip = p.Name,
+            ToolTip = $"{p.Name} · {p.Browser.DisplayName}",
             VerticalContentAlignment = VerticalAlignment.Top,
             ContextMenu = BuildProfileContextMenu(p, s),
             AllowDrop = true,
         };
         btn.Click += (_, _) => ProfileClicked?.Invoke(p);
-        AttachDragDrop(btn, p.Directory);
+        AttachDragDrop(btn, p.Key);
         return btn;
     }
 
@@ -378,9 +596,9 @@ public partial class ProfileDockWindow : Window
                     foreach (var d in g.ProfileDirs) allocated.Add(d);
                 foreach (var pp in App.BrowserBadges?.Profiles ?? Enumerable.Empty<ChromeProfile>())
                 {
-                    if (allocated.Contains(pp.Directory)) continue;
-                    if (order.Any(d => d.Equals(pp.Directory, StringComparison.OrdinalIgnoreCase))) continue;
-                    order.Add(pp.Directory);
+                    if (allocated.Contains(pp.Key)) continue;
+                    if (order.Any(d => d.Equals(pp.Key, StringComparison.OrdinalIgnoreCase))) continue;
+                    order.Add(pp.Key);
                 }
             }
             int idx = order.FindIndex(d => d.Equals(targetDir, StringComparison.OrdinalIgnoreCase));
@@ -402,7 +620,7 @@ public partial class ProfileDockWindow : Window
         var menu = new ContextMenu();
         var cfg = AppConfig.Current;
         var currentGroup = cfg.BrowserDockGroups.FirstOrDefault(
-            g => g.ProfileDirs.Any(d => d.Equals(p.Directory, StringComparison.OrdinalIgnoreCase)));
+            g => g.ProfileDirs.Any(d => d.Equals(p.Key, StringComparison.OrdinalIgnoreCase)));
         bool locked = cfg.BrowserDockLocked;
 
         var lockItem = new MenuItem
@@ -428,7 +646,7 @@ public partial class ProfileDockWindow : Window
             // Persist via the same field BrowserBadgesPage uses — toggles both
             // the floating badge and the dock button via Changed → RefreshDock.
             s.Visible = false;
-            AppConfig.Current.BrowserProfiles[p.Directory] = s;
+            AppConfig.Current.BrowserProfiles[p.Key] = s;
             AppConfig.Current.Save();
         };
         menu.Items.Add(disable);
@@ -439,7 +657,7 @@ public partial class ProfileDockWindow : Window
             var dlg = new AvatarTextEditorWindow(p, s) { Owner = null };
             if (dlg.ShowDialog() == true)
             {
-                AppConfig.Current.BrowserProfiles[p.Directory] = s;
+                AppConfig.Current.BrowserProfiles[p.Key] = s;
                 AppConfig.Current.Save();
             }
         };
@@ -458,7 +676,7 @@ public partial class ProfileDockWindow : Window
                 IsCheckable = true,
                 IsChecked  = ReferenceEquals(currentGroup, g),
             };
-            item.Click += (_, _) => MoveProfileToGroup(p.Directory, captured);
+            item.Click += (_, _) => MoveProfileToGroup(p.Key, captured);
             moveTo.Items.Add(item);
         }
         if (cfg.BrowserDockGroups.Count > 0) moveTo.Items.Add(new Separator());
@@ -469,7 +687,7 @@ public partial class ProfileDockWindow : Window
             if (string.IsNullOrWhiteSpace(name)) return;
             var grp = new BrowserDockGroup { Name = name.Trim() };
             AppConfig.Current.BrowserDockGroups.Add(grp);
-            MoveProfileToGroup(p.Directory, grp);
+            MoveProfileToGroup(p.Key, grp);
         };
         moveTo.Items.Add(newGroup);
         menu.Items.Add(moveTo);
@@ -479,7 +697,7 @@ public partial class ProfileDockWindow : Window
             Header   = "从分组中移除",
             IsEnabled = currentGroup is not null && !locked,
         };
-        removeFromGroup.Click += (_, _) => RemoveProfileFromAllGroups(p.Directory);
+        removeFromGroup.Click += (_, _) => RemoveProfileFromAllGroups(p.Key);
         menu.Items.Add(removeFromGroup);
 
         menu.Items.Add(new Separator());
@@ -490,7 +708,7 @@ public partial class ProfileDockWindow : Window
             // Find all top-level Chrome HWNDs for this profile (incl. iconic)
             // and post WM_CLOSE so Chrome runs its own clean-shutdown path
             // (saves session, prompts on unsaved tabs).
-            var hwnds = App.BrowserBadges?.FindWindowsForProfile(p.Directory) ?? new List<IntPtr>();
+            var hwnds = App.BrowserBadges?.FindWindowsForProfile(p.Key) ?? new List<IntPtr>();
             foreach (var h in hwnds)
                 NativeMethods.PostMessage(h, NativeConstants.WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
         };
@@ -502,21 +720,21 @@ public partial class ProfileDockWindow : Window
     /// <summary>Move <paramref name="profileDir"/> into <paramref name="target"/>,
     /// removing it from any other group it currently belongs to. Saves config
     /// (triggers dock rebuild via <see cref="AppConfig.Changed"/>).</summary>
-    private static void MoveProfileToGroup(string profileDir, BrowserDockGroup target)
+    private static void MoveProfileToGroup(string profileKey, BrowserDockGroup target)
     {
         var cfg = AppConfig.Current;
         foreach (var g in cfg.BrowserDockGroups)
-            g.ProfileDirs.RemoveAll(d => d.Equals(profileDir, StringComparison.OrdinalIgnoreCase));
-        if (!target.ProfileDirs.Any(d => d.Equals(profileDir, StringComparison.OrdinalIgnoreCase)))
-            target.ProfileDirs.Add(profileDir);
+            g.ProfileDirs.RemoveAll(d => d.Equals(profileKey, StringComparison.OrdinalIgnoreCase));
+        if (!target.ProfileDirs.Any(d => d.Equals(profileKey, StringComparison.OrdinalIgnoreCase)))
+            target.ProfileDirs.Add(profileKey);
         cfg.Save();
     }
 
-    private static void RemoveProfileFromAllGroups(string profileDir)
+    private static void RemoveProfileFromAllGroups(string profileKey)
     {
         var cfg = AppConfig.Current;
         foreach (var g in cfg.BrowserDockGroups)
-            g.ProfileDirs.RemoveAll(d => d.Equals(profileDir, StringComparison.OrdinalIgnoreCase));
+            g.ProfileDirs.RemoveAll(d => d.Equals(profileKey, StringComparison.OrdinalIgnoreCase));
         // Drop now-empty groups so the BrowserBadges settings page doesn't
         // accumulate stale entries — same cleanup the settings UI does.
         cfg.BrowserDockGroups.RemoveAll(g => g.ProfileDirs.Count == 0);
@@ -648,6 +866,8 @@ public partial class ProfileDockWindow : Window
 
     private void Dock_MouseDown(object sender, MouseButtonEventArgs e)
     {
+        // Taskbar-style appbar is pinned by the shell — never drag-move it.
+        if (_appBarMode) return;
         // Don't hijack clicks on child buttons.
         if (e.OriginalSource is not Border) return;
         var hwnd = new WindowInteropHelper(this).Handle;
@@ -681,15 +901,26 @@ public partial class ProfileDockWindow : Window
         _dragging = false;
         DockRoot.ReleaseMouseCapture();
 
-        // Save new position (DIPs) so the dock comes back here on restart.
+        // Save new position so the dock comes back here on restart.
         var hwnd = new WindowInteropHelper(this).Handle;
         if (hwnd == IntPtr.Zero) return;
         if (!NativeMethods.GetWindowRect(hwnd, out var wr)) return;
-        var src = PresentationSource.FromVisual(this);
-        double sX = src?.CompositionTarget?.TransformToDevice.M11 ?? 1.0;
-        double sY = src?.CompositionTarget?.TransformToDevice.M22 ?? 1.0;
-        AppConfig.Current.BrowserDockX = wr.Left / sX;
-        AppConfig.Current.BrowserDockY = wr.Top  / sY;
+        if (PerMonitorPosition && MonitorId is not null)
+        {
+            // Monitor-bound: persist absolute device pixels keyed by monitor, so
+            // restore is DPI-exact and independent of the other monitors.
+            AppConfig.Current.BrowserDockMonitorPositions[MonitorId] =
+                new DockPoint { X = wr.Left, Y = wr.Top };
+        }
+        else
+        {
+            // Legacy free-drag path: DIPs, single global position.
+            var src = PresentationSource.FromVisual(this);
+            double sX = src?.CompositionTarget?.TransformToDevice.M11 ?? 1.0;
+            double sY = src?.CompositionTarget?.TransformToDevice.M22 ?? 1.0;
+            AppConfig.Current.BrowserDockX = wr.Left / sX;
+            AppConfig.Current.BrowserDockY = wr.Top  / sY;
+        }
         AppConfig.Current.Save();
         e.Handled = true;
     }

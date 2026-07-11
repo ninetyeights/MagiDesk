@@ -71,15 +71,34 @@
                         <ui:SymbolIcon Symbol="AppsListDetail24"/>
                     </ui:NavigationViewItem.Icon>
                 </ui:NavigationViewItem>
-                <ui:NavigationViewItem Content="浏览器徽标"
-                                       TargetPageType="{x:Type pages:BrowserBadgesPage}">
+                <ui:NavigationViewItem Content="浏览器">
                     <ui:NavigationViewItem.Icon>
                         <ui:SymbolIcon Symbol="Person24"/>
                     </ui:NavigationViewItem.Icon>
+                    <ui:NavigationViewItem.MenuItems>
+                        <ui:NavigationViewItem Content="徽标"
+                                               TargetPageType="{x:Type pages:BrowserBadgesPage}">
+                            <ui:NavigationViewItem.Icon>
+                                <ui:SymbolIcon Symbol="Person24"/>
+                            </ui:NavigationViewItem.Icon>
+                        </ui:NavigationViewItem>
+                        <ui:NavigationViewItem Content="Profile Dock"
+                                               TargetPageType="{x:Type pages:ProfileDockPage}">
+                            <ui:NavigationViewItem.Icon>
+                                <ui:SymbolIcon Symbol="AppsListDetail24"/>
+                            </ui:NavigationViewItem.Icon>
+                        </ui:NavigationViewItem>
+                    </ui:NavigationViewItem.MenuItems>
                 </ui:NavigationViewItem>
             </ui:NavigationView.MenuItems>
 
             <ui:NavigationView.FooterMenuItems>
+                <ui:NavigationViewItem Content="设置"
+                                       TargetPageType="{x:Type pages:SettingsPage}">
+                    <ui:NavigationViewItem.Icon>
+                        <ui:SymbolIcon Symbol="Settings24"/>
+                    </ui:NavigationViewItem.Icon>
+                </ui:NavigationViewItem>
                 <ui:NavigationViewItem Content="关于"
                                        TargetPageType="{x:Type pages:AboutPage}">
                     <ui:NavigationViewItem.Icon>

@@ -10,9 +10,11 @@ namespace MagiDesk.Features.Zones;
 
 /// <summary>
 /// Tree-based zone editor. The layout is a <see cref="LayoutTree"/> of
-/// nested splits; every operation is local to one subtree, so dragging a
-/// divider inside one branch can't affect any other branch (the behaviour
-/// the old global-grid editor couldn't offer).
+/// nested splits. Structural ops (split/merge/delete) stay local to one
+/// subtree, but dragging a divider moves every same-orientation divider that
+/// lies on the same grid line in lockstep (<see cref="AttachDividerDrag"/>),
+/// so a full row/column line behaves globally even though the tree nests one
+/// axis under the other. Dividers that don't share a line stay independent.
 ///
 /// Visuals are built once per structural change (<see cref="Rebuild"/>)
 /// and only repositioned during continuous operations (<see cref="Layout"/>).
@@ -26,6 +28,10 @@ public partial class ZoneEditorWindow : Window
     private const double MinFraction      = 0.02;
     private const double DragThresholdPx  = 6;
     private const double SnapPx           = 20;
+    /// <summary>Don't allow a new cut within this many px of the hovered zone's
+    /// own edge (an existing divider) — stops stacking near-duplicate lines on
+    /// the same divider.</summary>
+    private const double SplitInhibitPx   = 12;
 
     private readonly NativeMethods.RECT _workArea;
     private readonly LayoutProfile? _profile;
@@ -61,6 +67,11 @@ public partial class ZoneEditorWindow : Window
     private Point _lmbDownPos;
     private bool  _lmbDown;
     private bool  _isMarqueeSelecting;
+
+    // When true, a click-cut spans the WHOLE layout (splits every zone the line
+    // crosses) instead of only the hovered zone. Toggled by the "切割: 局部/全局"
+    // button. Dragging a divider is unaffected (still tree-local).
+    private bool  _globalSplit;
 
     // ---------------------------------------------------------------------
 
@@ -194,48 +205,71 @@ public partial class ZoneEditorWindow : Window
         AttachDividerDrag(dv);
     }
 
+    /// <summary>A divider dragged in lockstep with the grabbed one because it
+    /// lies on the same grid line. Captured at drag-start.</summary>
+    private readonly struct LinkedDivider
+    {
+        public required DividerVis Div         { get; init; }
+        public required double FracA           { get; init; } // parent.Fractions[ChildIdx] at drag start
+        public required double FracB           { get; init; } // parent.Fractions[ChildIdx+1] at drag start
+        public required double StartLinePx     { get; init; } // absolute divider line position at drag start
+        public required double ExtentPx        { get; init; } // parent's extent along the drag axis (px)
+    }
+
     private void AttachDividerDrag(DividerVis dv)
     {
         double startPx        = 0;
-        double startFracA     = 0;
-        double startFracB     = 0;
         double parentExtentPx = 0;
         // Snapped at drag-start: absolute canvas pixel positions of edges from
-        // leaves NOT affected by this drag. Edges inside the two children being
+        // leaves NOT affected by this drag. Edges inside the children being
         // resized move with the drag, so excluding them prevents self-snap.
         var snapTargets = new List<double>();
 
         double startDividerPx = 0; // absolute pixel position of divider center at drag start
         double clickOffsetPx  = 0; // cursor click position minus divider center
+        // Every same-orientation divider collinear with the grabbed one — moved
+        // together so a full grid line drags as a unit. This is what makes row
+        // ("横") dividers behave as globally as column ("竖") dividers even
+        // though the tree nests one axis under the other. Always includes dv.
+        var linked = new List<LinkedDivider>();
 
         dv.Rect.MouseLeftButtonDown += (_, e) =>
         {
-            startFracA = dv.Parent.Fractions[dv.ChildIdx];
-            startFracB = dv.Parent.Fractions[dv.ChildIdx + 1];
-
             bool vertical = dv.Parent.Orientation == SplitOrientation.Vertical;
             double canvasExtent = vertical ? ZoneCanvas.ActualWidth : ZoneCanvas.ActualHeight;
 
-            double cum = 0;
-            for (int k = 0; k <= dv.ChildIdx; k++) cum += dv.Parent.Fractions[k];
-            if (vertical)
+            startDividerPx = DividerLinePx(dv, vertical);
+            startPx        = vertical ? e.GetPosition(ZoneCanvas).X : e.GetPosition(ZoneCanvas).Y;
+            parentExtentPx = (vertical ? dv.ParentBounds.Width : dv.ParentBounds.Height) * canvasExtent;
+            clickOffsetPx  = startPx - startDividerPx;
+
+            // Collect all same-orientation dividers sitting on this same line
+            // (within ~1px). For a uniform grid these are the per-column row
+            // dividers, so dragging one row boundary moves the whole row.
+            linked.Clear();
+            foreach (var d2 in _dividers)
             {
-                startDividerPx = (dv.ParentBounds.X + cum * dv.ParentBounds.Width) * ZoneCanvas.ActualWidth;
-                startPx        = e.GetPosition(ZoneCanvas).X;
-                parentExtentPx = dv.ParentBounds.Width * ZoneCanvas.ActualWidth;
+                if (d2.Parent.Orientation != dv.Parent.Orientation) continue;
+                double linePx = DividerLinePx(d2, vertical);
+                if (Math.Abs(linePx - startDividerPx) > 1.5) continue;
+                double extentPx = (vertical ? d2.ParentBounds.Width : d2.ParentBounds.Height) * canvasExtent;
+                linked.Add(new LinkedDivider
+                {
+                    Div         = d2,
+                    FracA       = d2.Parent.Fractions[d2.ChildIdx],
+                    FracB       = d2.Parent.Fractions[d2.ChildIdx + 1],
+                    StartLinePx = linePx,
+                    ExtentPx    = extentPx,
+                });
             }
-            else
-            {
-                startDividerPx = (dv.ParentBounds.Y + cum * dv.ParentBounds.Height) * ZoneCanvas.ActualHeight;
-                startPx        = e.GetPosition(ZoneCanvas).Y;
-                parentExtentPx = dv.ParentBounds.Height * ZoneCanvas.ActualHeight;
-            }
-            clickOffsetPx = startPx - startDividerPx;
 
             snapTargets.Clear();
             var movingIds = new HashSet<int>();
-            CollectLeafIds(dv.Parent.Children[dv.ChildIdx],     movingIds);
-            CollectLeafIds(dv.Parent.Children[dv.ChildIdx + 1], movingIds);
+            foreach (var l in linked)
+            {
+                CollectLeafIds(l.Div.Parent.Children[l.Div.ChildIdx],     movingIds);
+                CollectLeafIds(l.Div.Parent.Children[l.Div.ChildIdx + 1], movingIds);
+            }
             _tree.EnumerateLeaves(new Rect(0, 0, 1, 1), entry =>
             {
                 if (movingIds.Contains(entry.Leaf.Id)) return;
@@ -276,16 +310,40 @@ public partial class ZoneEditorWindow : Window
                 if (d < bestDist) { bestDist = d; newDividerPx = t; }
             }
 
-            double delta = (newDividerPx - startDividerPx) / parentExtentPx;
-            double na = startFracA + delta;
-            double nb = startFracB - delta;
-            if (na < MinFraction || nb < MinFraction) return;
-
-            dv.Parent.Fractions[dv.ChildIdx]     = na;
-            dv.Parent.Fractions[dv.ChildIdx + 1] = nb;
+            // Drive every linked divider to the same absolute line position, each
+            // converting to its own parent's fractional delta. Bail as a UNIT if
+            // any would collapse below the minimum, so the line never desyncs.
+            // new line px = StartLinePx + delta*ExtentPx = newDividerPx exactly,
+            // so all linked dividers stay perfectly collinear regardless of extent.
+            var pending = new List<(DividerVis div, double na, double nb)>(linked.Count);
+            foreach (var l in linked)
+            {
+                if (l.ExtentPx < 1) continue;
+                double delta = (newDividerPx - l.StartLinePx) / l.ExtentPx;
+                double na = l.FracA + delta;
+                double nb = l.FracB - delta;
+                if (na < MinFraction || nb < MinFraction) return;
+                pending.Add((l.Div, na, nb));
+            }
+            foreach (var (div, na, nb) in pending)
+            {
+                div.Parent.Fractions[div.ChildIdx]     = na;
+                div.Parent.Fractions[div.ChildIdx + 1] = nb;
+            }
             Layout();
         };
         dv.Rect.MouseLeftButtonUp += (_, _) => dv.Rect.ReleaseMouseCapture();
+    }
+
+    /// <summary>Absolute canvas-pixel position of a divider's line along its
+    /// perpendicular axis, from its parent's current bounds + fractions.</summary>
+    private double DividerLinePx(DividerVis d, bool vertical)
+    {
+        double cum = 0;
+        for (int k = 0; k <= d.ChildIdx; k++) cum += d.Parent.Fractions[k];
+        return vertical
+            ? (d.ParentBounds.X + cum * d.ParentBounds.Width)  * ZoneCanvas.ActualWidth
+            : (d.ParentBounds.Y + cum * d.ParentBounds.Height) * ZoneCanvas.ActualHeight;
     }
 
     private static void CollectLeafIds(LayoutNode node, HashSet<int> ids)
@@ -465,14 +523,58 @@ public partial class ZoneEditorWindow : Window
         double snapAbsFrac = dir == SplitOrientation.Vertical
             ? SnapVerticalFrac  (pt.X, h.Bounds, h.Leaf.Id, W)
             : SnapHorizontalFrac(pt.Y, h.Bounds, h.Leaf.Id, H);
-        double fracInLeaf = dir == SplitOrientation.Vertical
-            ? (snapAbsFrac - h.Bounds.X) / Math.Max(1e-9, h.Bounds.Width)
-            : (snapAbsFrac - h.Bounds.Y) / Math.Max(1e-9, h.Bounds.Height);
 
-        _tree.SplitLeaf(h.Leaf.Id, dir, fracInLeaf);
+        // Suppress cuts sitting on the hovered zone's own divider.
+        if (CutSuppressed(snapAbsFrac, dir, h.Bounds, dir == SplitOrientation.Vertical ? W : H))
+        { e.Handled = true; return; }
+
+        if (GlobalActive)
+        {
+            SplitGlobal(snapAbsFrac, dir);
+            // Hoist the just-made cut (and any existing aligned cuts it lined up
+            // with) into a single full-span divider that drags as one. Prefer
+            // the cut's own direction so a horizontal cut becomes the global
+            // horizontal line (not demoted under a vertical split).
+            _tree.Canonicalize(dir);
+        }
+        else
+        {
+            double fracInLeaf = dir == SplitOrientation.Vertical
+                ? (snapAbsFrac - h.Bounds.X) / Math.Max(1e-9, h.Bounds.Width)
+                : (snapAbsFrac - h.Bounds.Y) / Math.Max(1e-9, h.Bounds.Height);
+            _tree.SplitLeaf(h.Leaf.Id, dir, fracInLeaf);
+        }
         _selectedIds.Clear();
         Rebuild();
         e.Handled = true;
+    }
+
+    /// <summary>Cut every leaf the line at <paramref name="absFrac"/> (a [0,1]
+    /// position along the perpendicular axis) passes through, so the split runs
+    /// edge-to-edge across the whole layout — a "global" cut. Each crossed leaf
+    /// is split at its own local fraction; the cuts line up at the same absolute
+    /// position and read as one continuous divider.</summary>
+    private void SplitGlobal(double absFrac, SplitOrientation dir)
+    {
+        var targets = new List<(int id, double frac)>();
+        _tree.EnumerateLeaves(new Rect(0, 0, 1, 1), entry =>
+        {
+            var b = entry.Bounds;
+            if (dir == SplitOrientation.Vertical)
+            {
+                if (absFrac > b.X + 1e-6 && absFrac < b.X + b.Width - 1e-6)
+                    targets.Add((entry.Leaf.Id, (absFrac - b.X) / b.Width));
+            }
+            else
+            {
+                if (absFrac > b.Y + 1e-6 && absFrac < b.Y + b.Height - 1e-6)
+                    targets.Add((entry.Leaf.Id, (absFrac - b.Y) / b.Height));
+            }
+        });
+        // Splitting one leaf never changes another leaf's bounds, so the
+        // fractions collected above stay correct as we apply them.
+        foreach (var (id, frac) in targets)
+            _tree.SplitLeaf(id, dir, frac);
     }
 
     private void ZoneCanvas_MouseRightButtonDown(object sender, MouseButtonEventArgs e)
@@ -547,20 +649,29 @@ public partial class ZoneEditorWindow : Window
         var b = leafBounds.Value;
         double px = b.X * W, py = b.Y * H, pw = b.Width * W, ph = b.Height * H;
 
+        // Global cut spans the whole canvas (edge to edge); local stays inside
+        // the hovered zone. Either way, hide the preview when the cut would sit
+        // on the zone's own divider (so you can't stack near-duplicate lines).
+        bool global = GlobalActive;
+
         if (IsShiftDown())
         {
-            double y = Math.Clamp(_cursorPos.Y, py + 2, py + ph - 2);
+            double y = Math.Clamp(_cursorPos.Y, global ? 2 : py + 2, global ? H - 2 : py + ph - 2);
             y = SnapHorizontal(y, b, target, H);
-            _previewLine.X1 = px + 6;
-            _previewLine.X2 = px + pw - 6;
+            if (CutSuppressed(y / H, SplitOrientation.Horizontal, b, H))
+            { _previewLine.Visibility = Visibility.Collapsed; return; }
+            _previewLine.X1 = global ? 6 : px + 6;
+            _previewLine.X2 = global ? W - 6 : px + pw - 6;
             _previewLine.Y1 = _previewLine.Y2 = y;
         }
         else
         {
-            double x = Math.Clamp(_cursorPos.X, px + 2, px + pw - 2);
+            double x = Math.Clamp(_cursorPos.X, global ? 2 : px + 2, global ? W - 2 : px + pw - 2);
             x = SnapVertical(x, b, target, W);
-            _previewLine.Y1 = py + 6;
-            _previewLine.Y2 = py + ph - 6;
+            if (CutSuppressed(x / W, SplitOrientation.Vertical, b, W))
+            { _previewLine.Visibility = Visibility.Collapsed; return; }
+            _previewLine.Y1 = global ? 6 : py + 6;
+            _previewLine.Y2 = global ? H - 6 : py + ph - 6;
             _previewLine.X1 = _previewLine.X2 = x;
         }
         _previewLine.Visibility = Visibility.Visible;
@@ -639,6 +750,17 @@ public partial class ZoneEditorWindow : Window
         Rebuild();
     }
 
+    private void BtnSplitScope_Click(object sender, RoutedEventArgs e)
+    {
+        _globalSplit = !_globalSplit;
+        BtnSplitScope.Content    = _globalSplit ? "切割: 全局" : "切割: 局部";
+        BtnSplitScope.Appearance = _globalSplit
+            ? Wpf.Ui.Controls.ControlAppearance.Primary
+            : Wpf.Ui.Controls.ControlAppearance.Secondary;
+        Root.Focus();
+        UpdatePreview();
+    }
+
     private void ExecuteMerge()
     {
         if (_selectedIds.Count < 2) return;
@@ -676,16 +798,44 @@ public partial class ZoneEditorWindow : Window
                 e.Handled = true; break;
             case Key.Delete: ExecuteDelete(); e.Handled = true; break;
             case Key.LeftShift:
-            case Key.RightShift: UpdatePreview(); break;
+            case Key.RightShift:
+            case Key.LeftCtrl:
+            case Key.RightCtrl: UpdatePreview(); break;
         }
     }
 
     private void OnKeyUp(object sender, KeyEventArgs e)
     {
-        if (e.Key is Key.LeftShift or Key.RightShift) UpdatePreview();
+        if (e.Key is Key.LeftShift or Key.RightShift or Key.LeftCtrl or Key.RightCtrl) UpdatePreview();
     }
 
     private static bool IsShiftDown() => (Keyboard.Modifiers & ModifierKeys.Shift) != 0;
+    private static bool IsCtrlDown()  => (Keyboard.Modifiers & ModifierKeys.Control) != 0;
+
+    /// <summary>Effective cut scope this moment: the toggle button's state,
+    /// inverted while Ctrl is held (hold-to-switch, like Shift for direction).</summary>
+    private bool GlobalActive => _globalSplit ^ IsCtrlDown();
+
+    /// <summary>True if a cut at <paramref name="absFrac"/> would land within
+    /// <see cref="SplitInhibitPx"/> of the hovered zone's own boundary in the
+    /// cut direction — i.e. the cursor is sitting on/next to an existing
+    /// divider. Suppresses the cut so lines can't be stacked on the same edge.</summary>
+    private static bool CutSuppressed(double absFrac, SplitOrientation dir, Rect hoverBounds, double extentPx)
+    {
+        double cutPx = absFrac * extentPx;
+        double e0, e1;
+        if (dir == SplitOrientation.Vertical)
+        {
+            e0 = hoverBounds.X * extentPx;
+            e1 = (hoverBounds.X + hoverBounds.Width) * extentPx;
+        }
+        else
+        {
+            e0 = hoverBounds.Y * extentPx;
+            e1 = (hoverBounds.Y + hoverBounds.Height) * extentPx;
+        }
+        return Math.Abs(cutPx - e0) < SplitInhibitPx || Math.Abs(cutPx - e1) < SplitInhibitPx;
+    }
 
     // ========================================================== save
 

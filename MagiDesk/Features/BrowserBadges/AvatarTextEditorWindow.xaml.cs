@@ -23,7 +23,7 @@ public partial class AvatarTextEditorWindow : Window
         _profile  = profile;
         _settings = settings;
 
-        TxtSubtitle.Text = $"{profile.Name}（{profile.Directory}）";
+        TxtSubtitle.Text = $"{profile.Name}（{profile.Browser.DisplayName} · {profile.Directory}）";
 
         // Seed inputs with current values or sensible defaults.
         TxtInput.Text = settings.AvatarText ?? GetInitial(profile.Name);

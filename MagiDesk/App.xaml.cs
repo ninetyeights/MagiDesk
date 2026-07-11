@@ -3,11 +3,14 @@ using System.Runtime;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Threading;
+using MagiDesk.Config;
 using MagiDesk.Features;
 using MagiDesk.Features.BrowserBadges;
+using MagiDesk.Features.EdgeSnap;
 using MagiDesk.Features.ProfileDock;
 using MagiDesk.Features.QuickGrid;
 using MagiDesk.Features.Zones;
+using Wpf.Ui.Appearance;
 
 namespace MagiDesk
 {
@@ -16,6 +19,7 @@ namespace MagiDesk
         private AltDragger? _altDragger;
         private ZonesEngine? _zonesEngine;
         private QuickGridService? _quickGrid;
+        private EdgeSnapEngine? _edgeSnap;
         private TrayService? _tray;
         private BrowserBadgeService? _browserBadges;
         private ProfileDockService? _profileDock;
@@ -77,6 +81,14 @@ namespace MagiDesk
                 Dispatcher.BeginInvoke(new Action(() => _tray?.ShowMain()));
             }, null, Timeout.Infinite, executeOnlyOnce: false);
 
+            // App.xaml hard-codes Theme="Light" so the resource dictionary
+            // loads with a known baseline. Switch to whatever the OS is using
+            // BEFORE base.OnStartup creates the main window — otherwise the
+            // first frame paints light brushes on a Mica-dark backdrop and
+            // titles render as dark-on-dark. SystemThemeWatcher in
+            // MainWindow.OnLoaded keeps the two in sync afterwards.
+            ApplyCurrentSystemTheme();
+
             base.OnStartup(e);
 
             // Hook callback runs on the UI thread — a Gen2 blocking collection
@@ -105,6 +117,12 @@ namespace MagiDesk
                 _zonesEngine.AttachTo(_altDragger);
                 _zonesEngine.Start();
 
+                // Edge snap — magnetic snapping to monitor/window edges while
+                // Alt is held during an Alt-drag move. Rides AltDragger's loop;
+                // backs off while Shift is held so Zones keeps that gesture.
+                _edgeSnap = new EdgeSnapEngine(Dispatcher);
+                _edgeSnap.AttachTo(_altDragger);
+
                 // Quick Grid — hotkey-triggered ad-hoc rows×cols picker.
                 _quickGrid = new QuickGridService(Dispatcher);
                 _quickGrid.Start();
@@ -122,6 +140,17 @@ namespace MagiDesk
                 // Loaded handler so we don't have to race Application.Activated).
                 _tray = new TrayService();
                 _tray.Start();
+
+                // Reconcile auto-start: if the user removed the Run entry via
+                // Task Manager, fall back to that (registry wins); otherwise
+                // make the registry match the saved config so a fresh install
+                // restoring config.json re-registers the entry.
+                bool runReg = StartupRegistration.IsEnabled();
+                if (runReg != AppConfig.Current.AutoStartEnabled)
+                {
+                    if (runReg) { AppConfig.Current.AutoStartEnabled = true; AppConfig.Current.Save(); }
+                    else        StartupRegistration.SetEnabled(AppConfig.Current.AutoStartEnabled);
+                }
             }
             catch (Exception ex)
             {
@@ -133,6 +162,7 @@ namespace MagiDesk
         protected override void OnExit(ExitEventArgs e)
         {
             _reinstallTimer?.Stop();
+            _edgeSnap?.Dispose();
             _altDragger?.Dispose();
             _zonesEngine?.Dispose();
             _quickGrid?.Dispose();
@@ -143,6 +173,43 @@ namespace MagiDesk
             _instanceMutex?.Dispose();
             _showEvent?.Dispose();
             base.OnExit(e);
+        }
+
+        private static void ApplyCurrentSystemTheme()
+        {
+            try
+            {
+                var sys = ApplicationThemeManager.GetSystemTheme();
+                var theme = sys switch
+                {
+                    SystemTheme.Dark    => ApplicationTheme.Dark,
+                    SystemTheme.HCBlack or SystemTheme.HCWhite
+                                        => ApplicationTheme.HighContrast,
+                    _                   => ApplicationTheme.Light,
+                };
+
+                // ThemesDictionary must merge BEFORE ControlsDictionary's
+                // first lookups (i.e. before any window opens). App.xaml
+                // declares only ControlsDictionary now and inserts this one at
+                // index 0 so the dependency order is correct.
+                var dicts = Current.Resources.MergedDictionaries;
+                dicts.Insert(0, new Wpf.Ui.Markup.ThemesDictionary { Theme = theme });
+                ApplicationThemeManager.Apply(theme);
+
+                ThemeLog($"applied {theme} (system={sys})");
+            }
+            catch (Exception ex) { ThemeLog($"apply failed: {ex.Message}"); }
+        }
+
+        private static void ThemeLog(string msg)
+        {
+            try
+            {
+                File.AppendAllText(
+                    Path.Combine(Path.GetTempPath(), "magidesk.log"),
+                    $"{DateTime.Now:HH:mm:ss.fff} THEME {msg}\n");
+            }
+            catch { }
         }
 
         private static void LogDpiContext()

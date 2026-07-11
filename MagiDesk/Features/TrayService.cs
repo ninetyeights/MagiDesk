@@ -22,19 +22,29 @@ public sealed class TrayService : IDisposable
         {
             Icon    = SystemIcons.Application,   // TODO swap for a real app icon
             Text    = "MagiDesk",
-            Visible = true,
+            Visible = AppConfig.Current.TrayIconEnabled,
             ContextMenuStrip = BuildMenu(),
         };
         _icon.DoubleClick += (_, _) => ShowMain();
     }
 
+    /// <summary>Show or hide the tray icon to match TrayIconEnabled.</summary>
+    public void ApplyVisibility()
+    {
+        if (_icon is null) return;
+        _icon.Visible = AppConfig.Current.TrayIconEnabled;
+    }
+
     public void HookMainWindow(System.Windows.Window main)
     {
         _main = main;
-        // Close button on the main window hides to tray instead of exiting.
+        // Close button on the main window hides to tray when tray is enabled,
+        // otherwise just exits the app — without a tray icon, hiding would
+        // leave the user with no way to surface the window again.
         main.Closing += (s, e) =>
         {
             if (Application.Current is App app && app.IsReallyExiting) return;
+            if (!AppConfig.Current.TrayIconEnabled) return; // let WPF close → app exits
             e.Cancel = true;
             main.Hide();
         };

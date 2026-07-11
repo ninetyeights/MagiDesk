@@ -46,6 +46,9 @@
                 <ui:Button x:Name="BtnDelete" Content="删除 (Del)"  Padding="14,6"
                            Margin="0,0,16,0" Click="BtnDelete_Click"
                            Appearance="Secondary"/>
+                <ui:Button x:Name="BtnSplitScope" Content="切割: 局部" Padding="14,6"
+                           Margin="0,0,16,0" Click="BtnSplitScope_Click"
+                           Appearance="Secondary"/>
                 <ui:Button x:Name="BtnResetGrid" Content="重置为 2×2" Padding="14,6"
                            Margin="0,0,8,0"  Click="BtnResetGrid_Click"
                            Appearance="Secondary"/>
@@ -61,8 +64,8 @@
         <TextBlock VerticalAlignment="Bottom" HorizontalAlignment="Center"
                    Margin="0,0,0,24" TextAlignment="Center" LineHeight="18"
                    Foreground="#CCFFFFFF" FontSize="12">
-            悬停显示切割线（Shift 切换方向）· 点击切割 · 按下拖过多个 zone = 多选<LineBreak/>
-            右键合并（必须同父节点相邻）· Delete 删除 · 平均分配均分选中 · 拖动分隔条只影响其父节点
+            悬停显示切割线（Shift 切换方向）· 点击切割 ·「切割: 局部/全局」或按住 Ctrl 临时切换贯穿整块<LineBreak/>
+            右键合并（必须同父节点相邻）· Delete 删除 · 平均分配均分选中 · 拖动分隔条整条网格线一起移动
         </TextBlock>
     </Grid>
 </Window>
