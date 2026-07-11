@@ -71,6 +71,12 @@
                         <ui:SymbolIcon Symbol="AppsListDetail24"/>
                     </ui:NavigationViewItem.Icon>
                 </ui:NavigationViewItem>
+                <ui:NavigationViewItem Content="桌面盒子"
+                                       TargetPageType="{x:Type pages:DesktopFencesPage}">
+                    <ui:NavigationViewItem.Icon>
+                        <ui:SymbolIcon Symbol="BorderAll24"/>
+                    </ui:NavigationViewItem.Icon>
+                </ui:NavigationViewItem>
                 <ui:NavigationViewItem Content="浏览器">
                     <ui:NavigationViewItem.Icon>
                         <ui:SymbolIcon Symbol="Person24"/>

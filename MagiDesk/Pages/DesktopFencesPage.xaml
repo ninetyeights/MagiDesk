@@ -1,0 +1,53 @@
+<Page x:Class="MagiDesk.Pages.DesktopFencesPage"
+      xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+      xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+      xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+      Title="桌面盒子"
+      x:Name="PageRoot">
+    <ScrollViewer Background="Transparent"
+                  MaxHeight="{Binding ActualHeight, ElementName=PageRoot}"
+                  VerticalScrollBarVisibility="Auto"
+                  HorizontalScrollBarVisibility="Disabled"
+                  Padding="0">
+        <Grid Margin="16,16,20,16">
+            <StackPanel HorizontalAlignment="Stretch" MaxWidth="1100">
+                <TextBlock Text="桌面盒子（开发中）" FontSize="28" FontWeight="SemiBold"/>
+                <TextBlock Text="Fences / Coodesker 式桌面图标整理。当前处于 M1.3 阶段：验证「盒子能否画在壁纸之上、图标之下」。"
+                           Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                           TextWrapping="Wrap"
+                           Margin="0,2,0,16"/>
+
+                <ui:Card HorizontalAlignment="Stretch" Padding="18,16" Margin="0,0,0,12">
+                    <StackPanel>
+                        <TextBlock Text="M1.1 图标服务" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                        <ui:Button Content="列出桌面图标" Padding="12,8" Click="BtnList_Click"/>
+                    </StackPanel>
+                </ui:Card>
+
+                <ui:Card HorizontalAlignment="Stretch" Padding="18,16" Margin="0,0,0,12">
+                    <StackPanel>
+                        <TextBlock Text="M1.3 盒子 Z 序验证" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                        <TextBlock Text="点「显示测试盒子」，看桌面上出现的半透明盒子是否在图标下方（图标应盖在盒子上、仍可点）。"
+                                   FontSize="12"
+                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                   TextWrapping="Wrap"
+                                   Margin="0,0,0,8"/>
+                        <WrapPanel>
+                            <ui:Button x:Name="BtnBox" Content="显示测试盒子" Padding="12,8" Margin="0,0,8,8"
+                                       Appearance="Primary" Click="BtnBox_Click"/>
+                            <ui:Button Content="隐藏测试盒子" Padding="12,8" Margin="0,0,8,8" Click="BtnHideBox_Click"/>
+                        </WrapPanel>
+                    </StackPanel>
+                </ui:Card>
+
+                <ui:Card HorizontalAlignment="Stretch" Padding="12" Margin="0,0,0,12">
+                    <TextBox x:Name="Output" IsReadOnly="True" TextWrapping="NoWrap"
+                             VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
+                             MinHeight="240" FontFamily="Consolas" FontSize="12"
+                             BorderThickness="0" Background="Transparent"
+                             Text="点上面的按钮开始…"/>
+                </ui:Card>
+            </StackPanel>
+        </Grid>
+    </ScrollViewer>
+</Page>
