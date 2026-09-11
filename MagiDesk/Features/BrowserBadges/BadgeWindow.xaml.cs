@@ -218,9 +218,8 @@ public partial class BadgeWindow : Window
         AvatarInitial.Text = avatarText;
         try
         {
-            System.IO.File.AppendAllText(
-                System.IO.Path.Combine(System.IO.Path.GetTempPath(), "magidesk.log"),
-                $"{DateTime.Now:HH:mm:ss.fff} BADGE-AVATAR dir='{profile.Directory}' name='{profile.Name}' text='{settings.AvatarText ?? "<null>"}' rendered='{avatarText}' bg='{settings.AvatarBgHex ?? "<null>"}' shape={settings.AvatarShape}\n");
+            if (MagiDesk.Infrastructure.DiagnosticLog.Verbose)
+                MagiDesk.Infrastructure.DiagnosticLog.WriteSensitive($"{DateTime.Now:HH:mm:ss.fff} BADGE-AVATAR dir='{profile.Directory}' name='{profile.Name}' text='{settings.AvatarText ?? "<null>"}' rendered='{avatarText}' bg='{settings.AvatarBgHex ?? "<null>"}' shape={settings.AvatarShape}\n");
         }
         catch { }
 

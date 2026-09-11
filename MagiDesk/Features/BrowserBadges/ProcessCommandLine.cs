@@ -10,7 +10,7 @@ namespace MagiDesk.Features.BrowserBadges;
 /// </summary>
 internal static class ProcessCommandLine
 {
-    private static readonly Dictionary<int, string?> _cache = new();
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<int, string?> _cache = new();
 
     public static string? Get(int pid)
     {
@@ -33,7 +33,7 @@ internal static class ProcessCommandLine
         return result;
     }
 
-    public static void Forget(int pid) => _cache.Remove(pid);
+    public static void Forget(int pid) => _cache.TryRemove(pid, out _);
 
     /// <summary>
     /// Extract the value of a command-line flag. Handles

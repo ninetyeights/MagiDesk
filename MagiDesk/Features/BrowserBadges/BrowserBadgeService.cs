@@ -23,6 +23,12 @@ namespace MagiDesk.Features.BrowserBadges;
 public sealed class BrowserBadgeService : IDisposable
 {
     private readonly Dispatcher _ui;
+    private readonly MagiDesk.Infrastructure.CoalescedAction _scanRequest;
+    private readonly MagiDesk.Infrastructure.RefreshVersion _scanVersion = new();
+    private static readonly System.Threading.SemaphoreSlim ResolutionGate = new(2);
+    private string _settingsSnapshot = "";
+    private bool _disposed;
+    private readonly HashSet<IntPtr> _adding = new();
     private readonly Dictionary<IntPtr, BadgeEntry> _byHwnd = new();
     private readonly Dictionary<int, string?> _profileDirByPid = new();
     // Cache per HWND — profile doesn't change over a window's life. Value is a
@@ -57,11 +63,17 @@ public sealed class BrowserBadgeService : IDisposable
         public required string          ProfileKey;
     }
 
-    public BrowserBadgeService(Dispatcher ui) { _ui = ui; }
+    public BrowserBadgeService(Dispatcher ui)
+    {
+        _ui = ui;
+        _scanRequest = new(action => _ui.BeginInvoke(action, DispatcherPriority.Background),
+            () => _ = ScanSafelyAsync());
+    }
 
     public void Start()
     {
         RefreshCatalog();
+        _settingsSnapshot = BadgeSettingsSnapshot.Capture(AppConfig.Current);
 
         // Settings change → re-apply to every live badge.
         AppConfig.Changed += OnConfigChanged;
@@ -95,7 +107,7 @@ public sealed class BrowserBadgeService : IDisposable
 
         // Initial sweep — picks up browser windows that existed before our
         // hooks were installed. After this, event-driven updates take over.
-        Scan();
+        QueueScan();
     }
 
     private void OnLocationChange(IntPtr hook, uint evt, IntPtr hwnd,
@@ -146,8 +158,7 @@ public sealed class BrowserBadgeService : IDisposable
             if (_byHwnd.ContainsKey(hwnd)) return;
             _ui.BeginInvoke(new Action(() =>
             {
-                TryAddBadgeForHwnd(hwnd, (int)pid, browser);
-                WindowsChanged?.Invoke();
+                _ = TryAddBadgeForHwnd(hwnd, (int)pid, browser);
             }));
         }
     }
@@ -180,47 +191,56 @@ public sealed class BrowserBadgeService : IDisposable
         return browser;
     }
 
-    private void TryAddBadgeForHwnd(IntPtr hwnd, int pid, BrowserInfo browser)
+    private async Task TryAddBadgeForHwnd(IntPtr hwnd, int pid, BrowserInfo browser)
     {
-        if (_byHwnd.ContainsKey(hwnd)) return;
-        if (!NativeMethods.IsWindow(hwnd)) return;
+        if (_disposed || !_adding.Add(hwnd)) return;
+        try
+        {
+            if (_disposed) return;
+            if (_byHwnd.ContainsKey(hwnd)) return;
+            if (!NativeMethods.IsWindow(hwnd)) return;
 
-        var classBuf = new System.Text.StringBuilder(256);
-        NativeMethods.GetClassName(hwnd, classBuf, classBuf.Capacity);
-        if (classBuf.ToString() != "Chrome_WidgetWin_1") return;
-        if (!NativeMethods.IsWindowVisible(hwnd)) return;
-        if (NativeMethods.IsIconic(hwnd)) return;
-        if (NativeMethods.GetWindow(hwnd, NativeMethods.GW_OWNER) != IntPtr.Zero) return;
-        if (!NativeMethods.GetWindowRect(hwnd, out var r)) return;
-        if (r.Left <= -30000 || r.Top <= -30000) return;
-        if (r.Right - r.Left < 200 || r.Bottom - r.Top < 100) return;
+            var classBuf = new System.Text.StringBuilder(256);
+            NativeMethods.GetClassName(hwnd, classBuf, classBuf.Capacity);
+            if (classBuf.ToString() != "Chrome_WidgetWin_1") return;
+            if (!NativeMethods.IsWindowVisible(hwnd)) return;
+            if (NativeMethods.IsIconic(hwnd)) return;
+            if (NativeMethods.GetWindow(hwnd, NativeMethods.GW_OWNER) != IntPtr.Zero) return;
+            if (!NativeMethods.GetWindowRect(hwnd, out var r)) return;
+            if (r.Left <= -30000 || r.Top <= -30000) return;
+            if (r.Right - r.Left < 200 || r.Bottom - r.Top < 100) return;
 
-        var cfg = AppConfig.Current;
-        if (!cfg.BrowserBadgeEnabled) return;
+            var cfg = AppConfig.Current;
+            if (!cfg.BrowserBadgeEnabled) return;
 
-        string title = GetWindowTitle(hwnd);
-        string? profileKey = ResolveProfileKeyForWindow(hwnd, pid, title, browser);
-        if (profileKey is null) return;
+            string title = GetWindowTitle(hwnd);
+            string? profileKey = await ResolveProfileKeyForWindowAsync(hwnd, pid, title, browser, allowUia: false);
+            if (!IsCurrentWindow(hwnd, pid) || _byHwnd.ContainsKey(hwnd) || !cfg.BrowserBadgeEnabled) return;
+            if (profileKey is null) return;
 
-        // Refresh unconditionally here — a brand-new profile created after
-        // startup needs its fresh Local State data (name, highlight color,
-        // GAIA picture path) picked up, otherwise ApplyProfile would render
-        // with stale/default values and show the wrong avatar.
-        RefreshCatalog();
-        var profile = _profiles.FirstOrDefault(p => string.Equals(p.Key, profileKey, StringComparison.OrdinalIgnoreCase));
-        if (profile is null) return;
+            // Refresh unconditionally here — a brand-new profile created after
+            // startup needs its fresh Local State data (name, highlight color,
+            // GAIA picture path) picked up, otherwise ApplyProfile would render
+            // with stale/default values and show the wrong avatar.
+            RefreshCatalog();
+            var profile = _profiles.FirstOrDefault(p => string.Equals(p.Key, profileKey, StringComparison.OrdinalIgnoreCase));
+            if (profile is null) return;
 
-        var settings = cfg.BrowserProfiles.TryGetValue(profile.Key, out var s) ? s : new BrowserProfileSettings();
-        if (!settings.Visible) return;
+            var settings = cfg.BrowserProfiles.TryGetValue(profile.Key, out var s) ? s : new BrowserProfileSettings();
+            if (!settings.Visible) return;
 
-        var badge = new BadgeWindow(hwnd);
-        var entry = new BadgeEntry { Window = badge, ProfileKey = profile.Key };
-        _byHwnd[hwnd] = entry;
-        badge.ApplyProfile(profile, settings, cfg.BrowserBadgeHeight);
-        // UpdatePosition does EnsureHandle + SetWindowPos+SWP_SHOWWINDOW so
-        // the window appears at its final position on first paint (no flash).
-        badge.UpdatePosition();
-        Log($"  event-added badge for profile '{profile.Name}' [{profile.Key}] on hwnd {hwnd:X}");
+            var badge = new BadgeWindow(hwnd);
+            var entry = new BadgeEntry { Window = badge, ProfileKey = profile.Key };
+            _byHwnd[hwnd] = entry;
+            badge.ApplyProfile(profile, settings, cfg.BrowserBadgeHeight);
+            // UpdatePosition does EnsureHandle + SetWindowPos+SWP_SHOWWINDOW so
+            // the window appears at its final position on first paint (no flash).
+            badge.UpdatePosition();
+            WindowsChanged?.Invoke();
+            Log($"  event-added badge for profile '{profile.Name}' [{profile.Key}] on hwnd {hwnd:X}");
+        }
+        catch (Exception ex) { Log($"Add badge failed: {ex.GetType().Name}"); }
+        finally { _adding.Remove(hwnd); }
     }
 
     public void RefreshCatalog()
@@ -244,11 +264,10 @@ public sealed class BrowserBadgeService : IDisposable
 
     private static void Log(string msg)
     {
+        if (!MagiDesk.Infrastructure.DiagnosticLog.Verbose) return;
         try
         {
-            System.IO.File.AppendAllText(
-                System.IO.Path.Combine(System.IO.Path.GetTempPath(), "magidesk.log"),
-                $"{DateTime.Now:HH:mm:ss.fff} BADGE {msg}\n");
+            MagiDesk.Infrastructure.DiagnosticLog.WriteSensitive($"{DateTime.Now:HH:mm:ss.fff} BADGE {msg}\n");
         }
         catch { }
     }
@@ -299,18 +318,20 @@ public sealed class BrowserBadgeService : IDisposable
     /// tracking dictionary (which excludes profiles with Visible=false and
     /// may be stale after window-lifecycle races), so the profile dock can
     /// reliably find existing windows for focus/cycle.</summary>
-    public List<IntPtr> FindWindowsForProfile(string profileKey)
+    public async Task<List<IntPtr>> FindWindowsForProfileAsync(string profileKey)
     {
         var result = new List<IntPtr>();
         // includeIconic: true — dock click on a profile whose only window is
         // minimized must find the HWND so FocusWindow can SW_RESTORE it,
         // instead of falling through to the launch path and spawning a dup.
-        foreach (var (hwnd, pid, browser) in EnumerateBrowserWindows(includeIconic: true))
+        var windows = await Task.Run(() => EnumerateBrowserWindows(includeIconic: true).ToList());
+        foreach (var (hwnd, pid, browser) in windows)
         {
+            if (!IsCurrentWindow(hwnd, pid)) continue;
             string title = GetWindowTitle(hwnd);
             // UIA allowed: a dock click is user-initiated, and after the first
             // call the learned AUMID cache handles subsequent clicks.
-            string? key = ResolveProfileKeyForWindow(hwnd, pid, title, browser, allowUia: true);
+            string? key = await ResolveProfileKeyForWindowAsync(hwnd, pid, title, browser, allowUia: true);
             if (string.Equals(key, profileKey, StringComparison.OrdinalIgnoreCase))
                 result.Add(hwnd);
         }
@@ -319,6 +340,8 @@ public sealed class BrowserBadgeService : IDisposable
 
     public void Dispose()
     {
+        _disposed = true;
+        _scanVersion.Next();
         AppConfig.Changed -= OnConfigChanged;
         if (_locationHook != IntPtr.Zero)
         {
@@ -340,12 +363,33 @@ public sealed class BrowserBadgeService : IDisposable
     }
 
     private void OnConfigChanged()
-        => _ui.BeginInvoke(new Action(Scan));
+    {
+        if (_disposed) return;
+        string snapshot = BadgeSettingsSnapshot.Capture(AppConfig.Current);
+        if (snapshot == _settingsSnapshot) return;
+        _settingsSnapshot = snapshot;
+        QueueScan();
+    }
+
+    private void QueueScan()
+    {
+        if (_disposed) return;
+        _scanVersion.Next();
+        _scanRequest.Request();
+    }
+
+    private async Task ScanSafelyAsync()
+    {
+        try { await ScanAsync(); }
+        catch (Exception ex) { Log($"Scan failed: {ex.GetType().Name}"); }
+    }
 
     // ========================================================== scan
 
-    private void Scan()
+    private async Task ScanAsync()
     {
+        if (_disposed) return;
+        long version = _scanVersion.Next();
         var cfg = AppConfig.Current;
         if (!cfg.BrowserBadgeEnabled)
         {
@@ -353,8 +397,11 @@ public sealed class BrowserBadgeService : IDisposable
             return;
         }
 
-        // Enumerate all supported browsers' top-level windows.
-        var windows = EnumerateBrowserWindows().ToList();
+        // A SHOW callback may add a badge while enumeration awaits. Only sweep
+        // entries that existed before this snapshot, not those newly added.
+        var existing = _byHwnd.ToArray();
+        var windows = await Task.Run(() => EnumerateBrowserWindows().ToList());
+        if (_disposed || !_scanVersion.IsCurrent(version)) return;
         Log($"Scan: found {windows.Count} browser windows, catalog has {_profiles.Count} profiles");
         var seen = new HashSet<IntPtr>();
 
@@ -366,7 +413,9 @@ public sealed class BrowserBadgeService : IDisposable
             // happens when MagiDesk is launched with the browser already
             // running; populates the AUMID cache so later SHOW events resolve
             // fast without needing UIA at all.
-            string? profileKey = ResolveProfileKeyForWindow(hwnd, pid, title, browser, allowUia: true);
+            string? profileKey = await ResolveProfileKeyForWindowAsync(hwnd, pid, title, browser, allowUia: true);
+            if (_disposed || !_scanVersion.IsCurrent(version)) return;
+            if (!IsCurrentWindow(hwnd, pid)) continue;
             Log($"  hwnd={hwnd:X} pid={pid} browser={browser.Id} title=\"{title}\" profileKey={profileKey ?? "<null>"}");
             if (profileKey is null) continue;
 
@@ -399,8 +448,10 @@ public sealed class BrowserBadgeService : IDisposable
         }
 
         // Sweep away badges whose target windows disappeared.
-        foreach (var h in _byHwnd.Keys.Except(seen).ToList())
-            DisposeBadge(h);
+        foreach (var (h, old) in existing)
+            if (!seen.Contains(h) && _byHwnd.TryGetValue(h, out var current) && ReferenceEquals(old, current))
+                DisposeBadge(h);
+        WindowsChanged?.Invoke();
     }
 
     private void CloseAll()
@@ -483,18 +534,17 @@ public sealed class BrowserBadgeService : IDisposable
         foreach (var pair in list) yield return pair;
     }
 
-    private string? ResolveProfileKeyForWindow(IntPtr hwnd, int pid, string title, BrowserInfo browser)
-        => ResolveProfileKeyForWindow(hwnd, pid, title, browser, allowUia: false);
-
-    /// <summary>Resolve a browser HWND to its browser-qualified profile key.
-    /// Set <paramref name="allowUia"/>=true only when the caller can afford to
-    /// trigger Chromium's accessibility-tree build (whole-session slowdown):
-    /// initial startup scan (one-time cost) and user-initiated dock clicks
-    /// are OK. Event-driven paths (EVENT_OBJECT_SHOW) MUST pass false to
-    /// avoid the "not responding / white screen" freeze when new profile
-    /// windows appear.</summary>
-    private string? ResolveProfileKeyForWindow(IntPtr hwnd, int pid, string title, BrowserInfo browser, bool allowUia)
+    private bool IsCurrentWindow(IntPtr hwnd, int pid)
     {
+        if (_disposed || !NativeMethods.IsWindow(hwnd)) return false;
+        NativeMethods.GetWindowThreadProcessId(hwnd, out uint current);
+        return current == (uint)pid;
+    }
+
+    private async Task<string?> ResolveProfileKeyForWindowAsync(IntPtr hwnd, int pid,
+        string title, BrowserInfo browser, bool allowUia)
+    {
+        if (!IsCurrentWindow(hwnd, pid)) return null;
         // Only short-circuit on a positive cached answer. A prior null (e.g.,
         // from an early race where AUMID wasn't set yet) should retry.
         if (_profileKeyByHwnd.TryGetValue(hwnd, out var hwndCached) && hwndCached is not null)
@@ -546,7 +596,15 @@ public sealed class BrowserBadgeService : IDisposable
         // session (initial scan) and not at all for new-window events.
         if (key is null && allowUia)
         {
-            key = ResolveViaUIAutomation(hwnd, browser);
+            var profiles = _profiles.ToArray();
+            await ResolutionGate.WaitAsync();
+            try
+            {
+                if (!IsCurrentWindow(hwnd, pid)) return null;
+                key = await Task.Run(() => ResolveViaUIAutomation(hwnd, browser, profiles));
+            }
+            finally { ResolutionGate.Release(); }
+            if (!IsCurrentWindow(hwnd, pid)) return null;
             if (key is not null) { fromTrusted = true; Log($"    resolved via UIA: aumid={aumid ?? "<none>"} → {key}"); }
         }
 
@@ -562,7 +620,15 @@ public sealed class BrowserBadgeService : IDisposable
         {
             if (!_profileDirByPid.TryGetValue(pid, out var cachedDir))
             {
-                string? cmd = ProcessCommandLine.Get(pid);
+                await ResolutionGate.WaitAsync();
+                string? cmd;
+                try
+                {
+                    if (!IsCurrentWindow(hwnd, pid)) return null;
+                    cmd = await Task.Run(() => ProcessCommandLine.Get(pid));
+                }
+                finally { ResolutionGate.Release(); }
+                if (!IsCurrentWindow(hwnd, pid)) return null;
                 cachedDir = cmd is not null
                     ? ProcessCommandLine.ExtractFlag(cmd, "--profile-directory")
                     : null;
@@ -589,7 +655,7 @@ public sealed class BrowserBadgeService : IDisposable
     /// of that browser's known profile names. The avatar/profile button in the
     /// toolbar is labelled with the profile's display name.
     /// </summary>
-    private string? ResolveViaUIAutomation(IntPtr hwnd, BrowserInfo browser)
+    private static string? ResolveViaUIAutomation(IntPtr hwnd, BrowserInfo browser, IReadOnlyList<ChromeProfile> profiles)
     {
         try
         {
@@ -609,7 +675,7 @@ public sealed class BrowserBadgeService : IDisposable
                 catch { continue; }
                 if (string.IsNullOrEmpty(name)) continue;
 
-                foreach (var p in _profiles)
+                foreach (var p in profiles)
                 {
                     if (p.Browser.Kind != browser.Kind) continue;
                     if (string.IsNullOrEmpty(p.Name)) continue;

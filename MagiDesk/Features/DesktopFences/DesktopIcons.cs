@@ -31,6 +31,8 @@ internal static class DesktopIcons
     private static extern IntPtr SendMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
     [DllImport("user32.dll")]
     private static extern int GetWindowLong(IntPtr hWnd, int nIndex);
+    [DllImport("user32.dll")]
+    private static extern bool IsWindowVisible(IntPtr hWnd);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     private static extern int GetClassName(IntPtr hWnd, StringBuilder buf, int max);
     [DllImport("user32.dll")]
@@ -201,6 +203,12 @@ internal static class DesktopIcons
         if (TryLocate(out var defView, out _, out _))
             SendMessage(defView, WM_COMMAND, (IntPtr)CMD_SHOW_ICONS, IntPtr.Zero);
     }
+
+    /// <summary>Whether the desktop icons are currently shown (the icon ListView
+    /// is hidden when "Show desktop icons" is off). Lets callers toggle to a
+    /// known state instead of blindly flipping.</summary>
+    public static bool AreIconsShown()
+        => TryLocate(out _, out var listView, out _) && IsWindowVisible(listView);
 
     // ================================================================= helpers
 

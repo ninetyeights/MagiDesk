@@ -15,6 +15,10 @@ namespace MagiDesk.Features.ProfileDock;
 public sealed class ProfileDockService : IDisposable
 {
     private readonly Dispatcher _ui;
+    private readonly MagiDesk.Infrastructure.CoalescedAction _configRefresh;
+    private string _settingsSnapshot = "";
+    private bool _disposed;
+    private readonly HashSet<string> _clicksInProgress = new();
     // One dock window per target monitor (a single entry in single-monitor mode).
     private readonly List<ProfileDockWindow> _windows = new();
     // Signature of the layout-affecting config (mode + monitor targeting). When
@@ -31,14 +35,18 @@ public sealed class ProfileDockService : IDisposable
     private readonly Dictionary<string, DateTime> _lastLaunchUtc = new();
     private static readonly TimeSpan LaunchDebounce = TimeSpan.FromSeconds(5);
 
-    public ProfileDockService(Dispatcher ui) { _ui = ui; }
+    public ProfileDockService(Dispatcher ui)
+    {
+        _ui = ui;
+        _configRefresh = new(action => _ui.BeginInvoke(action, DispatcherPriority.Background), ApplyConfig);
+    }
 
     public void Start()
     {
         RefreshCatalog();
 
-        if (!AppConfig.Current.BrowserDockEnabled) return;
-        ShowDock();
+        _settingsSnapshot = BadgeSettingsSnapshot.CaptureDock(AppConfig.Current);
+        if (AppConfig.Current.BrowserDockEnabled) ShowDock();
 
         AppConfig.Changed += OnConfigChanged;
         if (App.BrowserBadges is not null)
@@ -47,6 +55,7 @@ public sealed class ProfileDockService : IDisposable
 
     public void Dispose()
     {
+        _disposed = true;
         AppConfig.Changed -= OnConfigChanged;
         if (App.BrowserBadges is not null)
             App.BrowserBadges.WindowsChanged -= OnWindowsChanged;
@@ -82,17 +91,26 @@ public sealed class ProfileDockService : IDisposable
         => $"{cfg.BrowserDockMode}|{cfg.BrowserDockMonitorMode}|{cfg.BrowserDockMonitorId}";
 
     private void OnConfigChanged()
-        => _ui.BeginInvoke(new Action(() =>
-        {
-            var cfg = AppConfig.Current;
-            if (!cfg.BrowserDockEnabled) { HideDock(); return; }
-            if (_windows.Count == 0) { ShowDock(); return; }
-            // Mode / monitor-target switch needs fresh windows so appbar
-            // reservations are set up / torn down cleanly and the right number
-            // of windows exist on the right monitors.
-            if (Signature(cfg) != _signature) { HideDock(); ShowDock(); }
-            else RefreshDock();
-        }));
+    {
+        if (_disposed) return;
+        string snapshot = BadgeSettingsSnapshot.CaptureDock(AppConfig.Current);
+        if (snapshot == _settingsSnapshot) return;
+        _settingsSnapshot = snapshot;
+        _configRefresh.Request();
+    }
+
+    private void ApplyConfig()
+    {
+        if (_disposed) return;
+        var cfg = AppConfig.Current;
+        if (!cfg.BrowserDockEnabled) { HideDock(); return; }
+        if (_windows.Count == 0) { ShowDock(); return; }
+        // Mode / monitor-target switch needs fresh windows so appbar
+        // reservations are set up / torn down cleanly and the right number
+        // of windows exist on the right monitors.
+        if (Signature(cfg) != _signature) { HideDock(); ShowDock(); }
+        else RefreshDock();
+    }
 
     public void RefreshCatalog()
     {
@@ -238,73 +256,80 @@ public sealed class ProfileDockService : IDisposable
 
     // ========================================================== click handler
 
-    private void OnProfileClicked(ChromeProfile p)
+    private async void OnProfileClicked(ChromeProfile p)
     {
-        // Find all top-level browser windows whose AUMID or cmdline profile
-        // directory matches this profile. Reuses existing detection via
-        // BrowserBadgeService if available, otherwise scans fresh.
-        var hwnds = FindWindowsForProfile(p.Key);
-
-        if (hwnds.Count == 0)
+        if (_disposed || !_clicksInProgress.Add(p.Key)) return;
+        try
         {
-            // Debounce: if we already kicked off a launch for this profile
-            // recently, ignore the click rather than spawning another browser
-            // instance (which would produce a duplicate window once the first
-            // load finishes).
-            var now = DateTime.UtcNow;
-            if (_lastLaunchUtc.TryGetValue(p.Key, out var last)
-                && now - last < LaunchDebounce)
-                return;
-            _lastLaunchUtc[p.Key] = now;
+            // Find all top-level browser windows whose AUMID or cmdline profile
+            // directory matches this profile. Reuses existing detection via
+            // BrowserBadgeService if available, otherwise scans fresh.
+            var hwnds = await FindWindowsForProfileAsync(p.Key);
+            if (_windows.Count == 0) return;
 
-            // Snapshot existing browser HWNDs on the UI thread so we can tell
-            // which window is new post-launch purely by set difference. This
-            // sidesteps the AUMID/title/UIA/cmdline resolution races that
-            // make fresh profile windows invisible to FindWindowsForProfile
-            // for a while.
-            var before = new HashSet<IntPtr>(
-                App.BrowserBadges?.EnumerateAllBrowserHwnds() ?? Enumerable.Empty<IntPtr>());
-
-            var browser = p.Browser;
-            string dir  = p.Directory;
-            string key  = p.Key;
-            System.Threading.Tasks.Task.Run(() =>
+            if (hwnds.Count == 0)
             {
-                ChromeLauncher.Launch(browser, dir);
-                AssociateNewHwndWithProfile(before, key);
-            });
-            return;
-        }
+                // Debounce: if we already kicked off a launch for this profile
+                // recently, ignore the click rather than spawning another browser
+                // instance (which would produce a duplicate window once the first
+                // load finishes).
+                var now = DateTime.UtcNow;
+                if (_lastLaunchUtc.TryGetValue(p.Key, out var last)
+                    && now - last < LaunchDebounce)
+                    return;
+                _lastLaunchUtc[p.Key] = now;
 
-        // Taskbar-style toggle: if any window of this profile is currently
-        // the foreground window, clicking the dock again minimizes it. Reset
-        // the cycle index so the next click resumes from window[0] — feels
-        // most natural when the user just collapsed the active one.
-        var fg = NativeMethods.GetForegroundWindow();
-        if (fg != IntPtr.Zero && hwnds.Contains(fg))
-        {
-            NativeMethods.ShowWindow(fg, NativeConstants.SW_MINIMIZE);
-            _cycleIndex.Remove(p.Key);
-            return;
-        }
+                // Snapshot existing browser HWNDs on the UI thread so we can tell
+                // which window is new post-launch purely by set difference. This
+                // sidesteps the AUMID/title/UIA/cmdline resolution races that
+                // make fresh profile windows invisible to FindWindowsForProfile
+                // for a while.
+                var before = new HashSet<IntPtr>(
+                    App.BrowserBadges?.EnumerateAllBrowserHwnds() ?? Enumerable.Empty<IntPtr>());
 
-        // One window → just focus it. Many → cycle through them.
-        int idx = 0;
-        if (hwnds.Count > 1)
-        {
-            idx = _cycleIndex.TryGetValue(p.Key, out var last) ? (last + 1) % hwnds.Count : 0;
-            _cycleIndex[p.Key] = idx;
+                var browser = p.Browser;
+                string dir  = p.Directory;
+                string key  = p.Key;
+                _ = System.Threading.Tasks.Task.Run(() =>
+                {
+                    ChromeLauncher.Launch(browser, dir);
+                    AssociateNewHwndWithProfile(before, key);
+                });
+                return;
+            }
+
+            // Taskbar-style toggle: if any window of this profile is currently
+            // the foreground window, clicking the dock again minimizes it. Reset
+            // the cycle index so the next click resumes from window[0] — feels
+            // most natural when the user just collapsed the active one.
+            var fg = NativeMethods.GetForegroundWindow();
+            if (fg != IntPtr.Zero && hwnds.Contains(fg))
+            {
+                NativeMethods.ShowWindow(fg, NativeConstants.SW_MINIMIZE);
+                _cycleIndex.Remove(p.Key);
+                return;
+            }
+
+            // One window → just focus it. Many → cycle through them.
+            int idx = 0;
+            if (hwnds.Count > 1)
+            {
+                idx = _cycleIndex.TryGetValue(p.Key, out var last) ? (last + 1) % hwnds.Count : 0;
+                _cycleIndex[p.Key] = idx;
+            }
+            FocusWindow(hwnds[idx]);
         }
-        FocusWindow(hwnds[idx]);
+        catch (Exception ex) { MagiDesk.Infrastructure.DiagnosticLog.Write($"Dock lookup failed: {ex.GetType().Name}\n"); }
+        finally { _clicksInProgress.Remove(p.Key); }
     }
 
-    private static List<IntPtr> FindWindowsForProfile(string profileKey)
+    private static Task<List<IntPtr>> FindWindowsForProfileAsync(string profileKey)
     {
         // Always do a fresh enumeration via the badge service's resolver.
         // The tracked-windows dictionary is per-visible-profile and can be
         // stale, which caused clicks to launch a duplicate window instead
         // of focusing an existing one.
-        return App.BrowserBadges?.FindWindowsForProfile(profileKey) ?? new List<IntPtr>();
+        return App.BrowserBadges?.FindWindowsForProfileAsync(profileKey) ?? Task.FromResult(new List<IntPtr>());
     }
 
     private static void FocusWindow(IntPtr hwnd)

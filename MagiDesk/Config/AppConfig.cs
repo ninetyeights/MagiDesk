@@ -155,6 +155,14 @@ public sealed class AppConfig
     /// actions remain available — the lock only freezes layout, not function.</summary>
     public bool BrowserDockLocked { get; set; } = false;
 
+    // ---- Desktop fences (custom-rendered desktop icon boxes) -------------
+    /// <summary>When on, hide the system desktop icons and show custom fence
+    /// boxes instead. Off by default — enabling hides the real icons.</summary>
+    public bool DesktopFencesEnabled { get; set; } = false;
+    /// <summary>User's fence boxes. One is flagged unsorted (the catch-all).
+    /// The service seeds the unsorted box on first enable.</summary>
+    public List<DesktopBox> DesktopBoxes { get; set; } = new();
+
     // ---- General app settings --------------------------------------------
     /// <summary>Show the system tray icon on startup. When off, closing the
     /// main window exits the app instead of hiding to tray.</summary>
@@ -382,9 +390,7 @@ public sealed class AppConfig
     {
         try
         {
-            File.AppendAllText(
-                Path.Combine(Path.GetTempPath(), "magidesk.log"),
-                $"{DateTime.Now:HH:mm:ss.fff} CFG {msg}\n");
+            MagiDesk.Infrastructure.DiagnosticLog.Write($"{DateTime.Now:HH:mm:ss.fff} CFG {msg}\n");
         }
         catch { }
     }

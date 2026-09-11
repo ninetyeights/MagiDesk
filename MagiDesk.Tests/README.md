@@ -1,0 +1,31 @@
+# 无窗口回归测试
+
+安全性和性能回归入口是 `--headless`。它不会创建应用窗口、安装鼠标钩子、注入输入、启动或结束 MagiDesk，也不会保存用户配置。文件操作只使用本轮创建的临时目录。WPF 控件只做离屏布局；缩略图集成测试会为临时文本文件调用真实 Shell 接口。
+
+在仓库根目录执行：
+
+```powershell
+dotnet build MagiDesk.Tests/MagiDesk.Tests.csproj -c Debug -p:BaseOutputPath=C:\Users\Chester\AppData\Local\Temp\claude\magidesk-build\ --nologo -v q
+dotnet C:\Users\Chester\AppData\Local\Temp\claude\magidesk-build\Debug\net10.0-windows\MagiDesk.Tests.dll --headless
+```
+
+将两处 `Debug` 改为 `Release` 可验证优化编译。测试失败返回非零退出码。无参数入口及 `--real-world`、`--zones-restore` 是原有的交互式测试，会操作真实桌面，不属于本轮自动验证范围。
+
+20 个测试覆盖：
+
+- 后台缩略图线程、同路径请求合并、并发上限、LRU 淘汰、超大条目不缓存、排队与运行期间取消、文件原位变化时拒绝旧结果、失败重试。
+- 40 个并行文件创建，保留已有文件内容，并跳过同名文件夹。
+- 异步刷新乱序及生命周期失效；浏览器角标和 Dock 配置快照；连续变更合并。
+- 10,000 条数据的列表和网格虚拟化、滚动、重排、清空，以及真实 WPF ScrollViewer 的离屏布局。
+- 真实 Shell 缩略图后台加载并返回可跨线程使用的冻结图像。
+- 日志后台格式化、过载丢弃、UTF-8 大小限制、轮转和敏感内容默认关闭。
+
+## 本轮实现约束
+
+缩略图缓存最多 512 项、估算像素内存不超过 32 MiB；待处理路径最多 512 个，同时最多 4 次 Shell 调用。移出可见区域或关闭窗口会取消订阅。已经进入原生 Shell 的调用不能强制中断，其结果在取消后会被丢弃。
+
+窗口只创建可见区域及上下各一行的条目控件；选择状态仍保存在完整数据模型中。背景颜色和透明度更新不会重建条目。
+
+所有诊断写入集中到 `%TEMP%\magidesk.log`，单文件上限 2 MiB，保留一个 `.1` 备份，队列过载时丢弃日志。新写入的浏览器标题、Profile 头像详情和逐鼠标事件追踪默认关闭。需要诊断时，可在启动应用前设置环境变量 `MAGIDESK_DIAGNOSTICS=1`；关闭应用后清除即可恢复默认。此前已写入的旧日志不会被主动清除。
+
+浏览器全量扫描和 UIA/WMI 查询移到后台；UIA/WMI 同时最多两次。配置仅在相关字段变化时触发合并刷新。第三方 Shell 扩展及真实浏览器 UIA 行为、交互拖动和多屏 DPI 的实机表现仍需由用户运行应用确认。

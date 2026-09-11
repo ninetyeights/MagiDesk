@@ -12,40 +12,71 @@
         <Grid Margin="16,16,20,16">
             <StackPanel HorizontalAlignment="Stretch" MaxWidth="1100">
                 <TextBlock Text="桌面盒子（开发中）" FontSize="28" FontWeight="SemiBold"/>
-                <TextBlock Text="Fences / Coodesker 式桌面图标整理。当前处于 M1.3 阶段：验证「盒子能否画在壁纸之上、图标之下」。"
+                <TextBlock Text="Fences / Coodesker 式桌面整理。启用后隐藏系统桌面图标，改用自绘的盒子显示它们；关闭即恢复系统图标。当前是单个「桌面」盒子装全部项，多盒子/分类稍后做。"
                            Foreground="{DynamicResource TextFillColorSecondaryBrush}"
                            TextWrapping="Wrap"
                            Margin="0,2,0,16"/>
 
+                <ui:InfoBar HorizontalAlignment="Stretch"
+                            IsOpen="True" IsClosable="False"
+                            Severity="Warning"
+                            Title="会隐藏系统桌面图标"
+                            Message="启用时会把 Windows 桌面图标隐藏（改由盒子显示），关闭时恢复。若程序异常退出导致图标没恢复，右键桌面→查看→显示桌面图标即可手动恢复。"
+                            Margin="0,0,0,12"/>
+
                 <ui:Card HorizontalAlignment="Stretch" Padding="18,16" Margin="0,0,0,12">
-                    <StackPanel>
-                        <TextBlock Text="M1.1 图标服务" FontWeight="SemiBold" Margin="0,0,0,8"/>
-                        <ui:Button Content="列出桌面图标" Padding="12,8" Click="BtnList_Click"/>
-                    </StackPanel>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                            <TextBlock Text="启用桌面盒子" FontWeight="SemiBold"/>
+                            <TextBlock Text="隐藏系统图标，显示自绘盒子（图标双击可打开，盒子可拖动/缩放，位置会记住）。"
+                                       FontSize="12"
+                                       Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                       TextWrapping="Wrap"
+                                       Margin="0,2,8,0"/>
+                        </StackPanel>
+                        <ui:ToggleSwitch x:Name="TsEnabled" Grid.Column="1"
+                                         VerticalAlignment="Center"
+                                         Checked="Enabled_Changed" Unchecked="Enabled_Changed"/>
+                    </Grid>
+                </ui:Card>
+
+                <ui:Card HorizontalAlignment="Stretch" Padding="18,16" Margin="0,0,0,12">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                            <TextBlock Text="盒子" FontWeight="SemiBold"/>
+                            <TextBlock Text="新建盒子后，把图标拖进去（或右键图标「移动到」）分类。「映射文件夹」把任意文件夹镜像成盒子，双击子文件夹进入、返回键回上级。盒子 ☰ 菜单可改颜色/透明度/显示模式。"
+                                       FontSize="12"
+                                       Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                       TextWrapping="Wrap"
+                                       Margin="0,2,8,0"/>
+                        </StackPanel>
+                        <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                            <ui:Button x:Name="BtnNewBox" Content="新建盒子" Padding="12,8"
+                                       Margin="0,0,8,0" Click="BtnNewBox_Click"/>
+                            <ui:Button x:Name="BtnMapFolder" Content="映射文件夹" Padding="12,8"
+                                       Click="BtnMapFolder_Click"/>
+                        </StackPanel>
+                    </Grid>
                 </ui:Card>
 
                 <ui:Card HorizontalAlignment="Stretch" Padding="18,16" Margin="0,0,0,12">
                     <StackPanel>
-                        <TextBlock Text="M1.3 盒子 Z 序验证" FontWeight="SemiBold" Margin="0,0,0,4"/>
-                        <TextBlock Text="点「显示测试盒子」，看桌面上出现的半透明盒子是否在图标下方（图标应盖在盒子上、仍可点）。"
-                                   FontSize="12"
-                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"
-                                   TextWrapping="Wrap"
-                                   Margin="0,0,0,8"/>
-                        <WrapPanel>
-                            <ui:Button x:Name="BtnBox" Content="显示测试盒子" Padding="12,8" Margin="0,0,8,8"
-                                       Appearance="Primary" Click="BtnBox_Click"/>
-                            <ui:Button Content="隐藏测试盒子" Padding="12,8" Margin="0,0,8,8" Click="BtnHideBox_Click"/>
-                        </WrapPanel>
+                        <TextBlock Text="桌面项（调试）" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                        <ui:Button Content="列出桌面项" Padding="12,8" Click="BtnList_Click"/>
+                        <TextBox x:Name="Output" IsReadOnly="True" TextWrapping="NoWrap"
+                                 VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
+                                 MinHeight="180" Margin="0,10,0,0"
+                                 FontFamily="Consolas" FontSize="12"
+                                 BorderThickness="0" Background="Transparent"/>
                     </StackPanel>
-                </ui:Card>
-
-                <ui:Card HorizontalAlignment="Stretch" Padding="12" Margin="0,0,0,12">
-                    <TextBox x:Name="Output" IsReadOnly="True" TextWrapping="NoWrap"
-                             VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
-                             MinHeight="240" FontFamily="Consolas" FontSize="12"
-                             BorderThickness="0" Background="Transparent"
-                             Text="点上面的按钮开始…"/>
                 </ui:Card>
             </StackPanel>
         </Grid>

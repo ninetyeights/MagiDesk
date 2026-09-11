@@ -12,6 +12,7 @@ internal static class NativeConstants
     public const int WM_RBUTTONUP     = 0x0205;
 
     public const uint SWP_NOSIZE         = 0x0001;
+    public const uint SWP_NOMOVE         = 0x0002;
     public const uint SWP_NOZORDER       = 0x0004;
     public const uint SWP_NOACTIVATE     = 0x0010;
     public const uint SWP_NOOWNERZORDER  = 0x0200;
@@ -37,13 +38,20 @@ internal static class NativeConstants
 
     // DWM
     public const int DWMWA_EXTENDED_FRAME_BOUNDS = 9;
+    public const int DWMWA_CLOAKED               = 14;
 
     // GetAncestor flags
     public const uint GA_ROOT = 2;
 
     // ShowWindow
-    public const int SW_MINIMIZE = 6;
-    public const int SW_RESTORE  = 9;
+    public const int SW_MINIMIZE       = 6;
+    public const int SW_RESTORE        = 9;
+
+    // GetWindowLong
+    public const int  GWL_STYLE        = -16;
+    public const int  GWL_EXSTYLE      = -20;
+    public const uint WS_CAPTION       = 0x00C00000;
+    public const int  WS_EX_TOOLWINDOW = 0x00000080;
 
     // Hit-test codes used as wParam for WM_NCLBUTTONDOWN
     public const int HTCAPTION    = 2;

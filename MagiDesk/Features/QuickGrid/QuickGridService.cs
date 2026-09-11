@@ -70,9 +70,7 @@ public sealed class QuickGridService : IDisposable
     {
         try
         {
-            System.IO.File.AppendAllText(
-                System.IO.Path.Combine(System.IO.Path.GetTempPath(), "magidesk.log"),
-                $"{DateTime.Now:HH:mm:ss.fff} HOTKEY {msg}\n");
+            MagiDesk.Infrastructure.DiagnosticLog.Write($"{DateTime.Now:HH:mm:ss.fff} HOTKEY {msg}\n");
         }
         catch { }
     }

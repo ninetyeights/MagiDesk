@@ -144,7 +144,7 @@ namespace MagiDesk
                 DumpTree(VisualTreeHelper.GetChild(root, i), depth + 1, sb, false);
             if (top)
             {
-                try { File.AppendAllText(Path.Combine(Path.GetTempPath(), "magidesk.log"), sb.ToString()); } catch { }
+                try { MagiDesk.Infrastructure.DiagnosticLog.Write(sb.ToString()); } catch { }
             }
         }
 

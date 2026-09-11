@@ -4,6 +4,7 @@
         xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
         xmlns:pages="clr-namespace:MagiDesk.Pages"
         Title="MagiDesk"
+        Icon="/Assets/app.ico"
         Height="920" Width="1440"
         MinHeight="560" MinWidth="900"
         WindowStartupLocation="CenterScreen"
@@ -21,7 +22,11 @@
                      Title="MagiDesk"
                      ShowMaximize="True"
                      Background="Transparent"
-                     BorderThickness="0"/>
+                     BorderThickness="0">
+            <ui:TitleBar.Icon>
+                <ui:ImageIcon Source="pack://application:,,,/Assets/app.ico"/>
+            </ui:TitleBar.Icon>
+        </ui:TitleBar>
 
         <ui:NavigationView Grid.Row="1"
                            x:Name="RootNavigation"

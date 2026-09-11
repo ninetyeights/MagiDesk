@@ -420,6 +420,6 @@ internal sealed class ZonesEngine : IDisposable
     private static readonly string LogPath = Path.Combine(Path.GetTempPath(), "magidesk.log");
     private static void Log(string msg)
     {
-        try { File.AppendAllText(LogPath, $"{DateTime.Now:HH:mm:ss.fff} {msg}\n"); } catch { }
+        try { MagiDesk.Infrastructure.DiagnosticLog.Write($"{DateTime.Now:HH:mm:ss.fff} {msg}\n"); } catch { }
     }
 }

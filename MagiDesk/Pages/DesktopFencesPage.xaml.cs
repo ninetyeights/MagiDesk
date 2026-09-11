@@ -1,57 +1,70 @@
 using System.Text;
 using System.Windows;
 using System.Windows.Controls;
+using MagiDesk.Config;
 using MagiDesk.Features.DesktopFences;
-using MagiDesk.Features.Zones;
-using MagiDesk.Native;
 
 namespace MagiDesk.Pages;
 
-/// <summary>Dev/validation page for the desktop-fences feature (M1.1 icon
-/// service + M1.3 Z-order spike). Temporary — remove once the real UI lands.</summary>
+/// <summary>Desktop-fences settings (architecture B: hide system icons, custom
+/// render). The actual boxes are owned by <see cref="DesktopFenceService"/>;
+/// this page just flips the enable flag and offers a debug listing.</summary>
 public partial class DesktopFencesPage : Page
 {
-    private NativeFenceWindow? _testBox;
+    private bool _loading;
 
-    public DesktopFencesPage() => InitializeComponent();
+    public DesktopFencesPage()
+    {
+        InitializeComponent();
+        PullToggles();
+        AppConfig.Changed += OnConfigChanged;
+        Unloaded += (_, _) => AppConfig.Changed -= OnConfigChanged;
+    }
+
+    private void OnConfigChanged() => Dispatcher.BeginInvoke(new Action(PullToggles));
+
+    private void PullToggles()
+    {
+        _loading = true;
+        TsEnabled.IsChecked = AppConfig.Current.DesktopFencesEnabled;
+        _loading = false;
+    }
+
+    private void Enabled_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_loading) return;
+        AppConfig.Current.DesktopFencesEnabled = TsEnabled.IsChecked == true;
+        AppConfig.Current.Save();
+    }
+
+    private void BtnNewBox_Click(object sender, RoutedEventArgs e)
+    {
+        if (App.DesktopFences is null) return;
+        var name = Features.DesktopFences.TextPrompt.Show("新建盒子", "盒子名称：", "新盒子");
+        if (name is null) return;
+        if (!AppConfig.Current.DesktopFencesEnabled)
+        {
+            AppConfig.Current.DesktopFencesEnabled = true; // enabling shows the boxes
+            AppConfig.Current.Save();
+        }
+        App.DesktopFences.AddBox(name);
+    }
+
+    private void BtnMapFolder_Click(object sender, RoutedEventArgs e)
+    {
+        if (App.DesktopFences is null) return;
+        var dlg = new Microsoft.Win32.OpenFolderDialog { Title = "选择要映射到桌面的文件夹" };
+        if (dlg.ShowDialog() != true) return;
+        App.DesktopFences.AddFolderBox(dlg.FolderName);
+    }
 
     private void BtnList_Click(object sender, RoutedEventArgs e)
     {
-        var icons = DesktopIcons.Enumerate();
+        var items = DesktopItems.Enumerate();
         var sb = new StringBuilder();
-        sb.AppendLine($"共 {icons.Count} 个桌面图标：");
-        foreach (var i in icons)
-            sb.AppendLine($"  [{i.Index,2}] ({i.X,5},{i.Y,5})  {i.Name}");
+        sb.AppendLine($"共 {items.Count} 个桌面项：");
+        foreach (var it in items)
+            sb.AppendLine($"  {(it.Icon is null ? "·" : "▣")}  {it.Name}");
         Output.Text = sb.ToString();
-    }
-
-    private void BtnBox_Click(object sender, RoutedEventArgs e)
-    {
-        try { _testBox?.Close(); } catch { }
-
-        // A test box on the primary monitor's work area, inset a bit so it's
-        // clearly visible and overlaps some icons.
-        var mon = MonitorEnumerator.All().FirstOrDefault(m => m.IsPrimary)
-               ?? MonitorEnumerator.All().FirstOrDefault();
-        if (mon is null) { Output.Text = "找不到显示器"; return; }
-        var wa = mon.WorkArea;
-        var rect = new NativeMethods.RECT
-        {
-            Left   = wa.Left + 120,
-            Top    = wa.Top  + 120,
-            Right  = wa.Left + 120 + 640,
-            Bottom = wa.Top  + 120 + 460,
-        };
-
-        _testBox = NativeFenceWindow.Create("测试盒子 · Test Fence", rect);
-        Output.Text = $"已显示测试盒子 @ [{rect.Left},{rect.Top} {rect.Right - rect.Left}x{rect.Bottom - rect.Top}]\n" +
-                      "看它在图标下方还是上方？细节看 %TEMP%\\magidesk.log 的 FENCE 段。";
-    }
-
-    private void BtnHideBox_Click(object sender, RoutedEventArgs e)
-    {
-        try { _testBox?.Close(); } catch { }
-        _testBox = null;
-        Output.Text = "已隐藏测试盒子。";
     }
 }

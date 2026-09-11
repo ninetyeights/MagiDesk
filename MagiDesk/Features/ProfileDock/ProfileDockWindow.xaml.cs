@@ -33,9 +33,10 @@ public partial class ProfileDockWindow : Window
     // Topmost-reassert timer. WPF Topmost only sets HWND_TOPMOST once at HWND
     // creation; other apps that periodically reassert their own topmost (Teams
     // call window, media players, OBS, etc.) end up above us. Reasserting on a
-    // timer keeps the dock visibly on top in practice.
+    // timer keeps the dock visibly on top in practice. Fullscreen handling is
+    // separate (event-driven, see OnFullscreenChanged) — this timer's only job
+    // is fighting other apps for the topmost slot while nothing is fullscreen.
     private System.Windows.Threading.DispatcherTimer? _topmostTimer;
-    private static readonly IntPtr HWND_TOPMOST = new(-1);
     private const uint SWP_NOSIZE     = 0x0001;
     private const uint SWP_NOMOVE     = 0x0002;
     private const uint SWP_NOZORDER   = 0x0004;
@@ -100,6 +101,10 @@ public partial class ProfileDockWindow : Window
         if (Mode == DockMode.AppBar) EnableAppBarMode(h);
         else if (PerMonitorPosition) Loaded += (_, _) => PlaceFloating(h);
 
+        FullscreenWatcher.EnsureStarted();
+        FullscreenWatcher.Changed += OnFullscreenChanged;
+        if (FullscreenWatcher.IsFullscreenOnWindowsMonitor(h)) ApplyFullscreenZOrder(h, true);
+
         _topmostTimer = new System.Windows.Threading.DispatcherTimer(
             System.Windows.Threading.DispatcherPriority.Background)
         {
@@ -113,6 +118,7 @@ public partial class ProfileDockWindow : Window
     {
         _topmostTimer?.Stop();
         _topmostTimer = null;
+        FullscreenWatcher.Changed -= OnFullscreenChanged;
         // Release the reserved screen strip so other windows reclaim the space.
         _appBar?.Remove();
         _appBar = null;
@@ -238,36 +244,42 @@ public partial class ProfileDockWindow : Window
         if (_dragging) return;
         var h = new WindowInteropHelper(this).Handle;
         if (h == IntPtr.Zero) return;
-        // Back off whenever a full-screen app owns the foreground (ShareX's
-        // capture overlay + its top toolbar, games, full-screen video, etc.).
-        // Re-asserting topmost here would yank the dock back above that overlay
-        // and cover its toolbar — exactly what the system taskbar avoids by
-        // staying below "rude" full-screen windows.
-        if (ForegroundIsFullscreen(h)) return;
+        // Skip while fullscreen owns THIS window's monitor — OnFullscreenChanged
+        // already demoted us there and re-promoting here would fight that. A
+        // different monitor being fullscreen doesn't affect this window.
+        if (FullscreenWatcher.IsFullscreenOnWindowsMonitor(h)) return;
         // SWP_NOMOVE | SWP_NOSIZE — only touch Z-order. SWP_NOACTIVATE so the
         // dock never takes focus when reasserting (matches WS_EX_NOACTIVATE).
-        NativeMethods.SetWindowPos(h, HWND_TOPMOST, 0, 0, 0, 0,
+        NativeMethods.SetWindowPos(h, NativeMethods.HWND_TOPMOST, 0, 0, 0, 0,
             SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
     }
 
-    /// <summary>True when the foreground window (other than the dock itself)
-    /// fully covers its monitor — a full-screen overlay we must not climb over.
-    /// Excludes the desktop/shell so a bare desktop doesn't count.</summary>
-    private static bool ForegroundIsFullscreen(IntPtr self)
+    /// <summary>Step aside like the system taskbar does — drop out of the
+    /// topmost band and sink to the very bottom of the z-order — instead of
+    /// hiding the window outright. Re-queries this window's own monitor since
+    /// <see cref="FullscreenWatcher.Changed"/> carries no payload (some other
+    /// monitor's state may be what changed).</summary>
+    private void OnFullscreenChanged()
     {
-        var fg = NativeMethods.GetForegroundWindow();
-        if (fg == IntPtr.Zero || fg == self) return false;
-        if (fg == NativeMethods.GetShellWindow() || fg == NativeMethods.GetDesktopWindow()) return false;
-        if (!NativeMethods.GetWindowRect(fg, out var wr)) return false;
+        var h = new WindowInteropHelper(this).Handle;
+        if (h == IntPtr.Zero) return;
+        ApplyFullscreenZOrder(h, FullscreenWatcher.IsFullscreenOnWindowsMonitor(h));
+    }
 
-        var mon = NativeMethods.MonitorFromWindow(fg, NativeMethods.MONITOR_DEFAULTTONEAREST);
-        var mi  = new NativeMethods.MONITORINFOEX { cbSize = Marshal.SizeOf<NativeMethods.MONITORINFOEX>() };
-        if (!NativeMethods.GetMonitorInfo(mon, ref mi)) return false;
-        var m = mi.rcMonitor;
-
-        // Covers the whole monitor bounds (allow it to spill past the edges,
-        // as ShareX's virtual-screen overlay does).
-        return wr.Left <= m.Left && wr.Top <= m.Top && wr.Right >= m.Right && wr.Bottom >= m.Bottom;
+    private static void ApplyFullscreenZOrder(IntPtr h, bool fs)
+    {
+        if (fs)
+        {
+            NativeMethods.SetWindowPos(h, NativeMethods.HWND_NOTOPMOST, 0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+            NativeMethods.SetWindowPos(h, NativeMethods.HWND_BOTTOM, 0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        }
+        else
+        {
+            NativeMethods.SetWindowPos(h, NativeMethods.HWND_TOPMOST, 0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        }
     }
 
     /// <summary>Rebuild the buttons from the current profile catalog. Safe to
@@ -703,12 +715,14 @@ public partial class ProfileDockWindow : Window
         menu.Items.Add(new Separator());
 
         var closeAll = new MenuItem { Header = "关闭该 profile 的所有窗口" };
-        closeAll.Click += (_, _) =>
+        closeAll.Click += async (_, _) =>
         {
             // Find all top-level Chrome HWNDs for this profile (incl. iconic)
             // and post WM_CLOSE so Chrome runs its own clean-shutdown path
             // (saves session, prompts on unsaved tabs).
-            var hwnds = App.BrowserBadges?.FindWindowsForProfile(p.Key) ?? new List<IntPtr>();
+            List<IntPtr> hwnds;
+            try { hwnds = App.BrowserBadges is { } badges ? await badges.FindWindowsForProfileAsync(p.Key) : new(); }
+            catch { return; }
             foreach (var h in hwnds)
                 NativeMethods.PostMessage(h, NativeConstants.WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
         };
@@ -778,9 +792,7 @@ public partial class ProfileDockWindow : Window
     {
         try
         {
-            System.IO.File.AppendAllText(
-                System.IO.Path.Combine(System.IO.Path.GetTempPath(), "magidesk.log"),
-                $"{DateTime.Now:HH:mm:ss.fff} DOCK-AVATAR dir='{p.Directory}' name='{p.Name}' text='{s.AvatarText ?? "<null>"}' bg='{s.AvatarBgHex ?? "<null>"}' shape={s.AvatarShape}\n");
+            MagiDesk.Infrastructure.DiagnosticLog.WriteSensitive($"{DateTime.Now:HH:mm:ss.fff} DOCK-AVATAR dir='{p.Directory}' name='{p.Name}' text='{s.AvatarText ?? "<null>"}' bg='{s.AvatarBgHex ?? "<null>"}' shape={s.AvatarShape}\n");
         }
         catch { }
         // Shape (inset or edge-to-edge).

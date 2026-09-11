@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
@@ -18,7 +18,13 @@
     <TieredPGO>true</TieredPGO>
 
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets\app.ico</ApplicationIcon>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- App icon (exe + window + tray). See Assets\logo.svg for the source. -->
+    <Resource Include="Assets\app.ico" />
+  </ItemGroup>
 
   <ItemGroup>
     <InternalsVisibleTo Include="MagiDesk.Tests" />
@@ -36,10 +42,5 @@
     <PackageReference Include="System.Management" Version="9.0.0" />
   </ItemGroup>
 
-  <ItemGroup>
-    <!-- UI Automation for reading Chrome's toolbar profile button. -->
-    <Reference Include="UIAutomationClient" />
-    <Reference Include="UIAutomationTypes" />
-  </ItemGroup>
 
 </Project>

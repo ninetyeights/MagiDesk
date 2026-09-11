@@ -6,6 +6,7 @@ using System.Windows.Threading;
 using MagiDesk.Config;
 using MagiDesk.Features;
 using MagiDesk.Features.BrowserBadges;
+using MagiDesk.Features.DesktopFences;
 using MagiDesk.Features.EdgeSnap;
 using MagiDesk.Features.ProfileDock;
 using MagiDesk.Features.QuickGrid;
@@ -20,10 +21,12 @@ namespace MagiDesk
         private ZonesEngine? _zonesEngine;
         private QuickGridService? _quickGrid;
         private EdgeSnapEngine? _edgeSnap;
+        private DesktopFenceService? _desktopFences;
         private TrayService? _tray;
         private BrowserBadgeService? _browserBadges;
         private ProfileDockService? _profileDock;
         public static QuickGridService?     QuickGrid     => ((App)Current)._quickGrid;
+        public static DesktopFenceService?  DesktopFences => ((App)Current)._desktopFences;
         public static TrayService?          Tray          => ((App)Current)._tray;
         public static BrowserBadgeService?  BrowserBadges => ((App)Current)._browserBadges;
         public static ProfileDockService?   ProfileDock   => ((App)Current)._profileDock;
@@ -123,6 +126,11 @@ namespace MagiDesk
                 _edgeSnap = new EdgeSnapEngine(Dispatcher);
                 _edgeSnap.AttachTo(_altDragger);
 
+                // Desktop fences — custom-rendered icon boxes (hides the system
+                // desktop icons while enabled). Off unless the user opts in.
+                _desktopFences = new DesktopFenceService(Dispatcher);
+                _desktopFences.Start();
+
                 // Quick Grid — hotkey-triggered ad-hoc rows×cols picker.
                 _quickGrid = new QuickGridService(Dispatcher);
                 _quickGrid.Start();
@@ -162,6 +170,7 @@ namespace MagiDesk
         protected override void OnExit(ExitEventArgs e)
         {
             _reinstallTimer?.Stop();
+            _desktopFences?.Dispose();
             _edgeSnap?.Dispose();
             _altDragger?.Dispose();
             _zonesEngine?.Dispose();
@@ -205,9 +214,7 @@ namespace MagiDesk
         {
             try
             {
-                File.AppendAllText(
-                    Path.Combine(Path.GetTempPath(), "magidesk.log"),
-                    $"{DateTime.Now:HH:mm:ss.fff} THEME {msg}\n");
+                MagiDesk.Infrastructure.DiagnosticLog.Write($"{DateTime.Now:HH:mm:ss.fff} THEME {msg}\n");
             }
             catch { }
         }
@@ -225,9 +232,7 @@ namespace MagiDesk
             int vw = GetSystemMetrics(SM_CXVIRTUALSCREEN), vh = GetSystemMetrics(SM_CYVIRTUALSCREEN);
             try
             {
-                File.AppendAllText(
-                    Path.Combine(Path.GetTempPath(), "magidesk.log"),
-                    $"{DateTime.Now:HH:mm:ss.fff} STARTUP dpi={label} virtualScreen=[{vx},{vy} {vw}x{vh}]\n");
+                MagiDesk.Infrastructure.DiagnosticLog.Write($"{DateTime.Now:HH:mm:ss.fff} STARTUP dpi={label} virtualScreen=[{vx},{vy} {vw}x{vh}]\n");
             }
             catch { }
         }

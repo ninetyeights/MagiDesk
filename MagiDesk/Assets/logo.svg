@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 96 96" role="img" aria-label="MagiDesk">
+  <defs>
+    <linearGradient id="brand" x1="0" y1="0" x2="96" y2="96" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#2F53E6"/>
+      <stop offset="1" stop-color="#7A45E6"/>
+    </linearGradient>
+  </defs>
+  <!-- MagiDesk · Zone Snap: desktop split into zones, snapping into place with a spark -->
+  <rect x="0" y="0" width="96" height="96" rx="22" fill="url(#brand)"/>
+  <rect x="18" y="24" width="24" height="48" rx="6" fill="#ffffff" opacity=".92"/>
+  <rect x="48" y="24" width="26" height="22" rx="6" fill="#ffffff"/>
+  <rect x="48" y="50" width="26" height="22" rx="6" fill="#ffffff" opacity=".74"/>
+  <circle cx="72" cy="22" r="11" fill="#FFB020" opacity=".28"/>
+  <path d="M72 13 L74.4 19.6 L81 22 L74.4 24.4 L72 31 L69.6 24.4 L63 22 L69.6 19.6 Z" fill="#FFB020"/>
+</svg>

@@ -128,6 +128,9 @@ internal static class NativeMethods
     [return: MarshalAs(UnmanagedType.Bool)]
     public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
 
+    [DllImport("user32.dll")]
+    public static extern int GetWindowLong(IntPtr hWnd, int nIndex);
+
     // --- WinEventHook (for zone drag detection) -----------------------------
 
     public delegate void WinEventProc(
@@ -198,6 +201,12 @@ internal static class NativeMethods
     [DllImport("dwmapi.dll")]
     public static extern int DwmGetWindowAttribute(IntPtr hwnd, int dwAttribute, out RECT pvAttribute, int cbAttribute);
 
+    // Distinct name (not an overload) — a same-named "out int" overload makes
+    // `out var` at call sites ambiguous, since overload resolution can't pick
+    // between "out RECT"/"out int" until the var's type is already known.
+    [DllImport("dwmapi.dll", EntryPoint = "DwmGetWindowAttribute")]
+    public static extern int DwmGetWindowAttributeInt32(IntPtr hwnd, int dwAttribute, out int pvAttribute, int cbAttribute);
+
     // --- WindowPlacement (bypasses Win11 snap-state tracking) ---------------
 
     [StructLayout(LayoutKind.Sequential)]
@@ -218,4 +227,11 @@ internal static class NativeMethods
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static extern bool SetWindowPlacement(IntPtr hWnd, ref WINDOWPLACEMENT lpwndpl);
+
+    // --- SetWindowPos hWndInsertAfter sentinels ------------------------------
+
+    public static readonly IntPtr HWND_TOP       = IntPtr.Zero;
+    public static readonly IntPtr HWND_BOTTOM    = new(1);
+    public static readonly IntPtr HWND_TOPMOST   = new(-1);
+    public static readonly IntPtr HWND_NOTOPMOST = new(-2);
 }

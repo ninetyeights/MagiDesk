@@ -20,12 +20,26 @@ public sealed class TrayService : IDisposable
     {
         _icon = new NotifyIcon
         {
-            Icon    = SystemIcons.Application,   // TODO swap for a real app icon
+            Icon    = LoadAppIcon() ?? SystemIcons.Application,
             Text    = "MagiDesk",
             Visible = AppConfig.Current.TrayIconEnabled,
             ContextMenuStrip = BuildMenu(),
         };
         _icon.DoubleClick += (_, _) => ShowMain();
+    }
+
+    /// <summary>Load the app icon (Assets\app.ico) from the assembly resources for
+    /// the tray. Falls back to the system icon if anything goes wrong.</summary>
+    private static Icon? LoadAppIcon()
+    {
+        try
+        {
+            var res = Application.GetResourceStream(new Uri("pack://application:,,,/Assets/app.ico"));
+            if (res is null) return null;
+            using var s = res.Stream;
+            return new Icon(s);
+        }
+        catch { return null; }
     }
 
     /// <summary>Show or hide the tray icon to match TrayIconEnabled.</summary>

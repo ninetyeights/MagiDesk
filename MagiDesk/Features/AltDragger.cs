@@ -49,7 +49,6 @@ internal sealed class AltDragger : IDisposable
     private bool   _hasLast;
     private long   _lastApplyTicks;
     private POINT  _pendingPt;
-    private bool   _hasPending;
 
     // --- trace buffer: record every event, flush once per drag on buttonup.
     // Action: 0 = throttle-skipped, 1 = passed throttle but deduped, 2 = SetWindowPos called.
@@ -131,7 +130,7 @@ internal sealed class AltDragger : IDisposable
 
     private void RecordEvent(int msg, MSLLHOOKSTRUCT d)
     {
-        if (_traceCount >= TraceCap) return;
+        if (!MagiDesk.Infrastructure.DiagnosticLog.Verbose || _traceCount >= TraceCap) return;
         ref var t = ref _trace[_traceCount++];
         // Reset the whole slot — the array is reused across drags and stale
         // Tx/Ty/Tw/Th/Applied from a previous drag would otherwise be printed
@@ -162,28 +161,21 @@ internal sealed class AltDragger : IDisposable
     private void FlushTrace()
     {
         if (_traceCount == 0) return;
-        try
-        {
-            var sb = new System.Text.StringBuilder(_traceCount * 80);
-            sb.AppendLine($"=== drag {DateTime.Now:HH:mm:ss.fff} events={_traceCount} target={_target:X} anchor=({_anchorCursor.X},{_anchorCursor.Y}) anchorWin=[{_anchorWindow.Left},{_anchorWindow.Top} {_anchorWindow.Width}x{_anchorWindow.Height}] ===");
-            long first = _trace[0].Tick;
-            for (int i = 0; i < _traceCount; i++)
-            {
-                var t = _trace[i];
-                string name = t.Msg switch { 0x200 => "MOVE", 0x202 => "LUP", 0x205 => "RUP", _ => $"M{t.Msg:X}" };
-                string act = t.Action switch
-                {
-                    0 => "(throttled)",
-                    1 => "(dedup)",
-                    2 => $"-> SWP[{t.Tx},{t.Ty} {t.Tw}x{t.Th}] ok={t.SwpOk}",
-                    _ => "",
-                };
-                sb.AppendLine($"+{t.Tick - first,4}ms {name,-4} pt=({t.Px},{t.Py}) flags=0x{t.Flags:X} {act}");
-            }
-            File.AppendAllText(LogPath, sb.ToString());
-        }
-        catch { }
+        var trace = _trace[.._traceCount];
+        var target = _target;
+        var cursor = _anchorCursor;
+        var window = _anchorWindow;
+        var timestamp = DateTime.Now;
         _traceCount = 0;
+        MagiDesk.Infrastructure.DiagnosticLog.Write(() =>
+        {
+            var sb = new StringBuilder(trace.Length * 80);
+            sb.AppendLine($"=== drag {timestamp:HH:mm:ss.fff} events={trace.Length} target={target:X} anchor=({cursor.X},{cursor.Y}) anchorWin=[{window.Left},{window.Top} {window.Width}x{window.Height}] ===");
+            long first = trace[0].Tick;
+            foreach (var t in trace)
+                sb.AppendLine($"+{t.Tick - first}ms msg={t.Msg:X} pt=({t.Px},{t.Py}) action={t.Action} SWP=[{t.Tx},{t.Ty} {t.Tw}x{t.Th}] ok={t.SwpOk}");
+            return sb.ToString();
+        });
     }
 
     private bool TryBegin(MSLLHOOKSTRUCT data, bool resize)
@@ -215,7 +207,6 @@ internal sealed class AltDragger : IDisposable
         _anchorWindow   = rect;
         _resizeEdge     = resize ? HitTestForResize(data.pt, rect) : 0;
         _hasLast        = false;
-        _hasPending     = false;
         _lastApplyTicks = 0;
         _traceCount     = 0;
 
@@ -246,7 +237,6 @@ internal sealed class AltDragger : IDisposable
         _mode       = Mode.None;
         _target     = IntPtr.Zero;
         _hasLast    = false;
-        _hasPending = false;
 
         // Fire AFTER state is cleared so subscribers see a quiescent dragger.
         if (wasMove)
@@ -259,7 +249,6 @@ internal sealed class AltDragger : IDisposable
     {
         // Keep the latest pt so we can't "lose" it even if throttled.
         _pendingPt  = cur;
-        _hasPending = true;
 
         var ticks = Environment.TickCount64;
         if (ticks - _lastApplyTicks < ThrottleMs) return;
@@ -267,7 +256,6 @@ internal sealed class AltDragger : IDisposable
 
         RecordPassThrottle();
         Apply(_pendingPt);
-        _hasPending = false;
     }
 
     private void Apply(POINT cur, bool bypassDeadZone = false)
@@ -420,12 +408,9 @@ internal sealed class AltDragger : IDisposable
         };
     }
 
-    private static readonly string LogPath =
-        Path.Combine(Path.GetTempPath(), "magidesk.log");
-
     private static void Log(string msg)
     {
-        try { File.AppendAllText(LogPath, $"{DateTime.Now:HH:mm:ss.fff} {msg}\n"); }
+        try { MagiDesk.Infrastructure.DiagnosticLog.Write($"{DateTime.Now:HH:mm:ss.fff} {msg}\n"); }
         catch { }
     }
 }
