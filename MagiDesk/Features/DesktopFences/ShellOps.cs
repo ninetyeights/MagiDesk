@@ -71,6 +71,9 @@ internal static class ShellOps
         Run(FO_DELETE, paths, null, owner);
     }
 
+    internal static bool Transfer(IReadOnlyList<string> paths, string destination, bool move, IntPtr owner)
+        => paths.Count > 0 && Run(move ? FO_MOVE : FO_COPY, paths, destination, owner);
+
     // ---------------------------------------------------------- new items
     public static string? NewFolder(string dir)
     {

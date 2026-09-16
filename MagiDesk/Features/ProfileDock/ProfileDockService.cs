@@ -26,9 +26,8 @@ public sealed class ProfileDockService : IDisposable
     // in-place refresh (button rebuild / state push) is enough.
     private string _signature = "";
     private List<ChromeProfile> _profiles = new();
-    // Cycle state: remember the last window index we focused per profile so
-    // repeated clicks walk through the profile's windows round-robin.
-    private readonly Dictionary<string, int> _cycleIndex = new();
+    // At most one window selector is open across all dock monitors.
+    private System.Windows.Controls.ContextMenu? _windowPicker;
     // Debounce launches: Chrome takes a few seconds to create the window
     // after we spawn chrome.exe; a second click during that gap would find
     // no windows and trigger a duplicate launch.
@@ -43,6 +42,7 @@ public sealed class ProfileDockService : IDisposable
 
     public void Start()
     {
+        MagiDesk.Infrastructure.DiagnosticLog.Write($"DOCK-POS start exe={Environment.ProcessPath} assembly={typeof(ProfileDockService).Assembly.Location} enabled={AppConfig.Current.BrowserDockEnabled}\n");
         RefreshCatalog();
 
         _settingsSnapshot = BadgeSettingsSnapshot.CaptureDock(AppConfig.Current);
@@ -140,22 +140,11 @@ public sealed class ProfileDockService : IDisposable
                 MonitorWorkAreaPx  = m.WorkArea,
                 PerMonitorPosition = !legacy,
             };
-            if (!legacy && cfg.BrowserDockMonitorPositions.TryGetValue(m.Id, out var pos))
-                w.SavedPositionPx = pos;
-            // Legacy: seed the saved DIP position before Show(). In AppBar mode
-            // the shell overrides the rect, but the window must still OPEN on the
-            // intended monitor first — the appbar reserves space on whichever
-            // monitor MonitorFromWindow resolves to at registration time.
-            // (Monitor-bound windows instead seat themselves in device pixels
-            // via ProfileDockWindow.SeatOnTargetMonitor.)
-            if (legacy && cfg.BrowserDockX >= 0 && cfg.BrowserDockY >= 0)
-            {
-                w.Left = cfg.BrowserDockX;
-                w.Top  = cfg.BrowserDockY;
-            }
+            w.SavedPositionPx = DockPositionMemory.Read(cfg, !legacy, m.Id, m.DpiPercent / 100.0);
             w.ProfileClicked += OnProfileClicked;
             w.SetProfiles(groups, cfg.BrowserDockButtonSize, cfg.BrowserDockSeparator);
             w.Show();
+            w.RestoreFloatingPosition();
             _windows.Add(w);
         }
         OnWindowsChanged(); // initial state
@@ -174,6 +163,14 @@ public sealed class ProfileDockService : IDisposable
         if (!string.IsNullOrEmpty(cfg.BrowserDockMonitorId))
             chosen = all.FirstOrDefault(
                 m => string.Equals(m.Id, cfg.BrowserDockMonitorId, StringComparison.OrdinalIgnoreCase));
+        if (chosen is null && string.IsNullOrEmpty(cfg.BrowserDockMonitorId)
+            && cfg.BrowserDockMode == DockMode.Floating)
+        {
+            var primary = all.FirstOrDefault(m => m.IsPrimary) ?? all[0];
+            var saved = DockPositionMemory.Read(cfg, false, primary.Id, primary.DpiPercent / 100.0);
+            if (saved is not null)
+                chosen = all.MinBy(m => DockPositionMemory.DistanceSquared(saved, m.WorkArea));
+        }
         chosen ??= all.FirstOrDefault(m => m.IsPrimary) ?? all[0];
         return new List<MonitorSlot> { chosen };
     }
@@ -236,6 +233,8 @@ public sealed class ProfileDockService : IDisposable
 
     private void HideDock()
     {
+        if (_windowPicker is not null) _windowPicker.IsOpen = false;
+        _windowPicker = null;
         foreach (var w in _windows)
         {
             try { w.ProfileClicked -= OnProfileClicked; w.Close(); } catch { }
@@ -256,11 +255,13 @@ public sealed class ProfileDockService : IDisposable
 
     // ========================================================== click handler
 
-    private async void OnProfileClicked(ChromeProfile p)
+    private async void OnProfileClicked(ChromeProfile p, System.Windows.Controls.Button anchor)
     {
         if (_disposed || !_clicksInProgress.Add(p.Key)) return;
         try
         {
+            if (_windowPicker is not null) _windowPicker.IsOpen = false;
+            var foregroundAtClick = NativeMethods.GetForegroundWindow();
             // Find all top-level browser windows whose AUMID or cmdline profile
             // directory matches this profile. Reuses existing detection via
             // BrowserBadgeService if available, otherwise scans fresh.
@@ -290,37 +291,78 @@ public sealed class ProfileDockService : IDisposable
                 var browser = p.Browser;
                 string dir  = p.Directory;
                 string key  = p.Key;
+                string extra = AppConfig.Current.BrowserLaunchArguments.GetValueOrDefault(browser.Id) ?? "";
                 _ = System.Threading.Tasks.Task.Run(() =>
                 {
-                    ChromeLauncher.Launch(browser, dir);
-                    AssociateNewHwndWithProfile(before, key);
+                    if (ChromeLauncher.Launch(browser, dir, extra))
+                        AssociateNewHwndWithProfile(before, key);
                 });
                 return;
             }
 
-            // Taskbar-style toggle: if any window of this profile is currently
-            // the foreground window, clicking the dock again minimizes it. Reset
-            // the cycle index so the next click resumes from window[0] — feels
-            // most natural when the user just collapsed the active one.
+            // Multiple windows require explicit selection. Only a single
+            // window uses the taskbar-style minimize/restore toggle.
             var fg = NativeMethods.GetForegroundWindow();
-            if (fg != IntPtr.Zero && hwnds.Contains(fg))
+            // Do not steal focus back if the user switched apps during lookup.
+            if (fg != foregroundAtClick) return;
+            if (hwnds.Count > 1)
+            {
+                ShowWindowPicker(anchor, hwnds);
+                return;
+            }
+            if (ShouldMinimize(foregroundAtClick, hwnds))
             {
                 NativeMethods.ShowWindow(fg, NativeConstants.SW_MINIMIZE);
-                _cycleIndex.Remove(p.Key);
+                MagiDesk.Infrastructure.DiagnosticLog.Write($"DOCK-CLICK minimize hwnd={fg:X}");
                 return;
             }
 
-            // One window → just focus it. Many → cycle through them.
-            int idx = 0;
-            if (hwnds.Count > 1)
-            {
-                idx = _cycleIndex.TryGetValue(p.Key, out var last) ? (last + 1) % hwnds.Count : 0;
-                _cycleIndex[p.Key] = idx;
-            }
-            FocusWindow(hwnds[idx]);
+            FocusWindow(hwnds[0]);
+            MagiDesk.Infrastructure.DiagnosticLog.Write($"DOCK-CLICK focus hwnd={hwnds[0]:X} previous={foregroundAtClick:X}");
         }
         catch (Exception ex) { MagiDesk.Infrastructure.DiagnosticLog.Write($"Dock lookup failed: {ex.GetType().Name}\n"); }
         finally { _clicksInProgress.Remove(p.Key); }
+    }
+
+    internal static bool ShouldMinimize(IntPtr foreground, IReadOnlyCollection<IntPtr> profileWindows)
+        => profileWindows.Count == 1 && foreground != IntPtr.Zero && profileWindows.Contains(foreground);
+
+    private void ShowWindowPicker(System.Windows.Controls.Button anchor, IReadOnlyList<IntPtr> windows)
+    {
+        if (!anchor.IsVisible) return;
+        var menu = new System.Windows.Controls.ContextMenu
+        {
+            PlacementTarget = anchor,
+            Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom,
+            MaxHeight = 480,
+            MaxWidth = 600,
+        };
+        foreach (var hwnd in windows)
+        {
+            var title = new System.Text.StringBuilder(512);
+            NativeMethods.GetWindowText(hwnd, title, title.Capacity);
+            NativeMethods.GetWindowThreadProcessId(hwnd, out uint pid);
+            var item = new System.Windows.Controls.MenuItem
+            {
+                Header = new System.Windows.Controls.TextBlock
+                {
+                    Text = title.Length > 0 ? title.ToString() : $"浏览器窗口 {menu.Items.Count + 1}",
+                    TextTrimming = TextTrimming.CharacterEllipsis,
+                    MaxWidth = 540,
+                },
+            };
+            item.Click += (_, _) =>
+            {
+                if (_disposed || !NativeMethods.IsWindow(hwnd)) return;
+                NativeMethods.GetWindowThreadProcessId(hwnd, out uint currentPid);
+                if (currentPid != pid) return;
+                FocusWindow(hwnd);
+            };
+            menu.Items.Add(item);
+        }
+        _windowPicker = menu;
+        menu.Closed += (_, _) => { if (ReferenceEquals(_windowPicker, menu)) _windowPicker = null; };
+        menu.IsOpen = true;
     }
 
     private static Task<List<IntPtr>> FindWindowsForProfileAsync(string profileKey)

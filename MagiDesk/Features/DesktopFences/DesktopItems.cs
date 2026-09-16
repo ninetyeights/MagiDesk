@@ -12,15 +12,18 @@ namespace MagiDesk.Features.DesktopFences;
 /// loaded lazily per tile (see <see cref="ThumbnailLoader"/>), so <c>Icon</c> is
 /// always null here.</summary>
 internal sealed record DesktopItem(
-    string Path, string Name, ImageSource? Icon, bool IsFolder, long Size, DateTime Modified, DateTime Created);
+    string Path, string Name, ImageSource? Icon, bool IsFolder, long Size, DateTime Modified, DateTime Created)
+{
+    public bool IsShellItem => DesktopItems.IsShellPath(Path);
+}
 
 /// <summary>
 /// Enumerates the actual desktop items from the user + public Desktop folders,
 /// with shell display names and icons. This is the data source for the
 /// custom-rendered fences (architecture B): we hide the system desktop icons
 /// and draw our own tiles from these, so launching / naming go through the
-/// shell rather than the ListView. (Special namespace items like This PC /
-/// Recycle Bin are not filesystem entries — added later.)
+/// shell rather than the ListView. In unified desktop mode, enabled namespace
+/// icons (Recycle Bin, This PC, etc.) are read from the real desktop view.
 /// </summary>
 internal static class DesktopItems
 {
@@ -41,7 +44,7 @@ internal static class DesktopItems
 
     private const uint SHGFI_ICON = 0x000000100, SHGFI_LARGEICON = 0x0, SHGFI_DISPLAYNAME = 0x000000200;
 
-    public static IReadOnlyList<DesktopItem> Enumerate()
+    public static IReadOnlyList<DesktopItem> Enumerate(bool includeShellItems = false)
     {
         var items = new List<DesktopItem>();
         var seen  = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -60,6 +63,7 @@ internal static class DesktopItems
                 items.Add(Make(fsi, isFolder));
             }
         }
+        if (includeShellItems) items.AddRange(DesktopShellMenu.CaptureNamespaceItems());
         return Sort(items, SortBy.Name, false);
     }
 
@@ -126,6 +130,13 @@ internal static class DesktopItems
         var list = items.ToList();
         list.Sort((a, b) =>
         {
+            // Namespace icons stay ahead of files even when sorting descending.
+            if (a.IsShellItem != b.IsShellItem) return a.IsShellItem ? -1 : 1;
+            if (a.IsShellItem)
+            {
+                int priority = ShellIconPriority(a.Path).CompareTo(ShellIconPriority(b.Path));
+                if (priority != 0) return priority;
+            }
             int c = key(a, b);
             if (c == 0) c = string.Compare(a.Name, b.Name, StringComparison.CurrentCultureIgnoreCase);
             return desc ? -c : c;
@@ -136,8 +147,33 @@ internal static class DesktopItems
     /// <summary>Open an item the same way double-clicking it on the desktop would.</summary>
     public static void Open(string path)
     {
-        try { Process.Start(new ProcessStartInfo(path) { UseShellExecute = true }); }
+        try
+        {
+            if (IsShellPath(path))
+            {
+                var start = new ProcessStartInfo(System.IO.Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.Windows), "explorer.exe")) { UseShellExecute = true };
+                start.ArgumentList.Add(path);
+                Process.Start(start);
+            }
+            else Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
+        }
         catch { /* ignore launch failures for now */ }
+    }
+
+    internal static bool IsShellPath(string path) => path.StartsWith("::", StringComparison.Ordinal);
+
+    private static int ShellIconPriority(string path)
+    {
+        // Identity-based ordering works with localized or renamed display labels.
+        return path.ToUpperInvariant() switch
+        {
+            "::{20D04FE0-3AEA-1069-A2D8-08002B30309D}" => 0, // This PC
+            "::{645FF040-5081-101B-9F08-00AA002F954E}" => 1, // Recycle Bin
+            "::{5399E694-6CE5-4D6C-8FCE-1D8870FDCBA0}" => 2, // Control Panel
+            "::{21EC2020-3AEA-1069-A2DD-08002B30309D}" => 2,
+            _ => 3,
+        };
     }
 
     private static IEnumerable<string> DesktopFolders()

@@ -25,6 +25,8 @@ internal static class Program
     [STAThread]
     public static int Main(string[] args)
     {
+        if (args.Length > 0 && args[0] == "--edge-snap")
+            return EdgeSnapTests.Run();
         if (args.Length > 0 && args[0] == "--headless")
             return HeadlessTests.Run();
         if (args.Length > 0 && args[0] == "--real-world")

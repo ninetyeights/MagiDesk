@@ -45,7 +45,7 @@ namespace MagiDesk.Pages
             TxtEdgeSnapBand.Text        = cfg.EdgeSnapBand + " px";
             TsSnapMonitor.IsChecked     = cfg.EdgeSnapToMonitorEdges;
             TsSnapWindowEdges.IsChecked = cfg.EdgeSnapToWindowEdges;
-            TsSnapWindowAlign.IsChecked = cfg.EdgeSnapToWindowAlign;
+            TsSnapWindowCenters.IsChecked = cfg.EdgeSnapToWindowCenters;
 
             RefreshHints();
             RefreshEnabledUi();
@@ -160,7 +160,7 @@ namespace MagiDesk.Pages
             var cfg = AppConfig.Current;
             cfg.EdgeSnapToMonitorEdges = TsSnapMonitor.IsChecked == true;
             cfg.EdgeSnapToWindowEdges  = TsSnapWindowEdges.IsChecked == true;
-            cfg.EdgeSnapToWindowAlign  = TsSnapWindowAlign.IsChecked == true;
+            cfg.EdgeSnapToWindowCenters  = TsSnapWindowCenters.IsChecked == true;
             cfg.Save();
         }
 

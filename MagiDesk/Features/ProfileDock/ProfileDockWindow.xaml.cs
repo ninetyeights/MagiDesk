@@ -25,18 +25,17 @@ public partial class ProfileDockWindow : Window
     [DllImport("user32.dll")] private static extern int GetWindowLong(IntPtr h, int i);
     [DllImport("user32.dll")] private static extern int SetWindowLong(IntPtr h, int i, int v);
 
+    // Windows 11 taskbar running/active indicator metrics (DIPs).
+    private const double PillHeight    = 3;
+    private const double IdlePillWidth = 6;
+    private const double DockCornerRadius = 8;
+
     // Drag state.
     private bool _dragging;
     private NativeMethods.POINT _dragStartCursor;
     private int _dragStartWinX, _dragStartWinY;
 
-    // Topmost-reassert timer. WPF Topmost only sets HWND_TOPMOST once at HWND
-    // creation; other apps that periodically reassert their own topmost (Teams
-    // call window, media players, OBS, etc.) end up above us. Reasserting on a
-    // timer keeps the dock visibly on top in practice. Fullscreen handling is
-    // separate (event-driven, see OnFullscreenChanged) — this timer's only job
-    // is fighting other apps for the topmost slot while nothing is fullscreen.
-    private System.Windows.Threading.DispatcherTimer? _topmostTimer;
+    private bool _fullscreenDemoted;
     private const uint SWP_NOSIZE     = 0x0001;
     private const uint SWP_NOMOVE     = 0x0002;
     private const uint SWP_NOZORDER   = 0x0004;
@@ -50,7 +49,7 @@ public partial class ProfileDockWindow : Window
     private readonly Dictionary<string, Border> _buttonWrappers = new();
 
     /// <summary>Fired when the user clicks a profile button.</summary>
-    public event Action<ChromeProfile>? ProfileClicked;
+    public event Action<ChromeProfile, Button>? ProfileClicked;
 
     /// <summary>Floating vs AppBar. Must be set before <see cref="Window.Show"/>;
     /// the service recreates the window when the user switches mode.</summary>
@@ -67,7 +66,7 @@ public partial class ProfileDockWindow : Window
     /// itself there via device-pixel SetWindowPos, and drags persist to
     /// <see cref="AppConfig.BrowserDockMonitorPositions"/> keyed by
     /// <see cref="MonitorId"/>. When false it keeps the legacy free-drag
-    /// behavior (position seeded from BrowserDockX/Y in DIPs by the service).</summary>
+    /// behavior (one global physical-pixel position).</summary>
     internal bool PerMonitorPosition { get; set; }
     /// <summary>Saved device-pixel position for this monitor, if any. Null →
     /// center along the work-area top edge. Only consulted when
@@ -80,12 +79,113 @@ public partial class ProfileDockWindow : Window
     public ProfileDockWindow()
     {
         InitializeComponent();
+        DockRoot.LostMouseCapture += (_, _) => FinishPositionDrag();
+        DockPalette.EnsureWatching();
+        DockPalette.Changed += OnSystemThemeChanged;
+        ApplyTheme();
+    }
+
+    // ---------------------------------------------------------- theme
+
+    /// <summary>Repaint the dock chrome from <see cref="DockPalette"/>. Everything
+    /// binds the brushes with DynamicResource / SetResourceReference, so swapping
+    /// the resources restyles the live visual tree — no button rebuild needed.</summary>
+    private void ApplyTheme()
+    {
+        var p = DockPalette.For(AppConfig.Current);
+
+        // With the blur active the tint comes from the composition layer, so the
+        // Border must stay (almost) clear or it would paint over it; otherwise
+        // the Border is the bar.
+        //
+        // NOT pure Transparent: on a layered (AllowsTransparency) window the OS
+        // hit-tests by alpha, so alpha-0 pixels are click-through and the whole
+        // bar would stop responding to drags. Alpha 1 is invisible over the
+        // acrylic but keeps the surface grabbable.
+        SetBrush("DockBackgroundBrush",
+            _acrylic ? Color.FromArgb(0x01, 0x00, 0x00, 0x00) : p.Background);
+        SetBrush("DockBorderBrush",      p.Border);
+        SetBrush("DockHoverBrush",       p.Hover);
+        SetBrush("DockPressedBrush",     p.Pressed);
+        SetBrush("DockTextBrush",        p.Text);
+        SetBrush("DockSeparatorBrush",   p.Separator);
+        SetBrush("DockGroupBgBrush",     p.GroupBackground);
+        SetBrush("DockGroupBorderBrush", p.GroupBorder);
+
+        // Square while the blur is on: it fills the window rect and can't be
+        // clipped (see DockBackdrop), which is also how the real taskbar looks.
+        // The solid fallback paints the bar itself, so it can round normally.
+        DockRoot.CornerRadius    = new CornerRadius(_appBarMode || _acrylic ? 0 : DockCornerRadius);
+        DockRoot.BorderThickness = _appBarMode ? new Thickness(0, 0, 0, 1) : new Thickness(1);
+
+        // Re-tint the blur so a theme flip (or a forced Light dock on a dark
+        // Windows) restains the material, not just the WPF chrome.
+        var h = new WindowInteropHelper(this).Handle;
+        if (_acrylic && h != IntPtr.Zero) DockBackdrop.TryEnableAcrylic(h, p.AcrylicTint);
+
+        // Indicator fills are assigned imperatively, so re-run the last state.
+        if (_lastStates is not null) UpdateStates(_lastStates);
+    }
+
+    private void ApplyButtonAlignment()
+    {
+        ButtonPanel.HorizontalAlignment = _appBarMode && AppConfig.Current.BrowserDockAlignLeft
+            ? HorizontalAlignment.Left : HorizontalAlignment.Center;
+    }
+
+    private bool _acrylic;
+
+    private void SetBrush(string key, Color c)
+    {
+        var b = new SolidColorBrush(c);
+        b.Freeze();
+        Resources[key] = b;
+    }
+
+    private bool _closed;
+    private bool _themeRefreshPending;
+
+    private void OnSystemThemeChanged()
+    {
+        if (Dispatcher.HasShutdownStarted) return;
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            if (_closed || _themeRefreshPending) return;
+            _themeRefreshPending = true;
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                _themeRefreshPending = false;
+                if (_closed) return;
+                ApplyTheme();
+                MagiDesk.Infrastructure.DiagnosticLog.Write(
+                    $"DOCK-THEME refreshed mode={AppConfig.Current.BrowserDockTheme} dark={DockPalette.IsDark(AppConfig.Current)} acrylic={_acrylic}");
+            }), System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+        }));
+    }
+
+    internal static bool IsThemeChangeMessage(int message)
+        => message is 0x001A or 0x031A or 0x031E or 0x0320;
+
+    private IntPtr ThemeWndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+    {
+        // WPF can activate on mouse input despite WS_EX_NOACTIVATE. Preserve
+        // the browser foreground while still delivering the button click.
+        if (msg == 0x0021) // WM_MOUSEACTIVATE
+        {
+            handled = true;
+            return new IntPtr(3); // MA_NOACTIVATE (do not eat the click)
+        }
+        // WM_SETTINGCHANGE, WM_THEMECHANGED, DWM composition/accent changes.
+        // Listen on every dock, including floating windows without an AppBar.
+        if (IsThemeChangeMessage(msg)) OnSystemThemeChanged();
+        return IntPtr.Zero;
     }
 
     protected override void OnSourceInitialized(EventArgs e)
     {
         base.OnSourceInitialized(e);
         var h = new WindowInteropHelper(this).Handle;
+        HwndSource.FromHwnd(h)?.AddHook(ThemeWndProc);
         int ex = GetWindowLong(h, GWL_EXSTYLE);
         // NOACTIVATE keeps the dock from stealing focus when clicked;
         // TOOLWINDOW hides it from Alt-Tab.
@@ -93,31 +193,25 @@ public partial class ProfileDockWindow : Window
 
         // Monitor-bound windows seat themselves on the target monitor first, so
         // the appbar's MonitorFromWindow resolves to the right screen and the
-        // floating placement below centers on the correct work area. The legacy
-        // (primary / free-drag) path keeps relying on the DIP Left/Top the
-        // service seeded before Show — don't disturb it.
-        if (PerMonitorPosition) SeatOnTargetMonitor(h);
+        // floating placement below restores physical coordinates after layout.
+        SeatOnTargetMonitor(h);
 
         if (Mode == DockMode.AppBar) EnableAppBarMode(h);
-        else if (PerMonitorPosition) Loaded += (_, _) => PlaceFloating(h);
+
+        // Acrylic blur. Has to come after AppBar mode is resolved — the corner
+        // clipping differs between the flush strip and the floating island.
+        _acrylic = DockBackdrop.TryEnableAcrylic(h, DockPalette.For(AppConfig.Current).AcrylicTint);
+        ApplyTheme();
 
         FullscreenWatcher.EnsureStarted();
         FullscreenWatcher.Changed += OnFullscreenChanged;
-        if (FullscreenWatcher.IsFullscreenOnWindowsMonitor(h)) ApplyFullscreenZOrder(h, true);
-
-        _topmostTimer = new System.Windows.Threading.DispatcherTimer(
-            System.Windows.Threading.DispatcherPriority.Background)
-        {
-            Interval = TimeSpan.FromSeconds(3),
-        };
-        _topmostTimer.Tick += (_, _) => ReassertTopmost();
-        _topmostTimer.Start();
+        OnFullscreenChanged();
     }
 
     protected override void OnClosed(EventArgs e)
     {
-        _topmostTimer?.Stop();
-        _topmostTimer = null;
+        _closed = true;
+        DockPalette.Changed -= OnSystemThemeChanged;
         FullscreenWatcher.Changed -= OnFullscreenChanged;
         // Release the reserved screen strip so other windows reclaim the space.
         _appBar?.Remove();
@@ -139,10 +233,11 @@ public partial class ProfileDockWindow : Window
         // immediately shrink the window back to the buttons and break the
         // full-width bar.
         SizeToContent          = SizeToContent.Manual;
-        DockRoot.CornerRadius  = new CornerRadius(0);
-        DockRoot.BorderThickness = new Thickness(0, 0, 0, 1);
+        // Flush edge-to-edge strip; ApplyTheme squares the corners and leaves only
+        // a hairline along the inner edge — the system taskbar's own silhouette.
+        DockRoot.Padding       = new Thickness(0, 3, 0, 3);
         // Buttons sit in the middle of the full-width strip.
-        ButtonPanel.HorizontalAlignment = HorizontalAlignment.Center;
+        ApplyButtonAlignment();
 
         _appBar = new AppBarHost(h);
         _appBar.Register();
@@ -201,6 +296,15 @@ public partial class ProfileDockWindow : Window
     /// its saved per-monitor spot, or center it along the top edge of the
     /// monitor's work area. Clamped to the work area so a stale saved position
     /// (display rearranged / resolution changed) can't strand it off-screen.</summary>
+    internal void RestoreFloatingPosition()
+    {
+        if (Mode != DockMode.Floating || _positionRestored) return;
+        UpdateLayout();
+        var handle = new WindowInteropHelper(this).Handle;
+        MagiDesk.Infrastructure.DiagnosticLog.Write($"DOCK-POS restore-request hwnd={handle:X} loaded={IsLoaded} area={MonitorWorkAreaPx.Left},{MonitorWorkAreaPx.Top},{MonitorWorkAreaPx.Right},{MonitorWorkAreaPx.Bottom}\n");
+        if (handle != IntPtr.Zero) PlaceFloating(handle);
+    }
+
     private void PlaceFloating(IntPtr h)
     {
         if (_appBarMode) return; // the shell dictates the appbar rect
@@ -218,40 +322,19 @@ public partial class ProfileDockWindow : Window
         int wpx = (int)Math.Ceiling(wDip * sx);
         int hpx = (int)Math.Ceiling(hDip * sy);
 
-        int x, y;
-        if (SavedPositionPx is { } p)
-        {
-            x = p.X; y = p.Y;
-        }
-        else
-        {
-            x = wa.Left + Math.Max(0, (wa.Right - wa.Left - wpx) / 2);
-            y = wa.Top  + (int)Math.Round(12 * sy);
-        }
-
-        // Keep the whole strip within the target monitor's work area.
-        x = Math.Max(wa.Left, Math.Min(x, wa.Right  - wpx));
-        y = Math.Max(wa.Top,  Math.Min(y, wa.Bottom - hpx));
-
-        NativeMethods.SetWindowPos(h, IntPtr.Zero, x, y, 0, 0,
+        var point = DockPositionMemory.Clamp(SavedPositionPx, wa, wpx, hpx, sy);
+        bool placed = NativeMethods.SetWindowPos(h, IntPtr.Zero, point.X, point.Y, 0, 0,
             SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+        _positionRestored = placed;
+        MagiDesk.Infrastructure.DiagnosticLog.Write($"DOCK-POS restore monitor={MonitorId} x={point.X} y={point.Y} saved={SavedPositionPx is not null} ok={placed}\n");
     }
 
-    private void ReassertTopmost()
+    private bool _positionRestored;
+
+    protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
     {
-        // Skip while the user is dragging — a SetWindowPos call mid-drag would
-        // fight the live position update from Dock_MouseMove.
-        if (_dragging) return;
-        var h = new WindowInteropHelper(this).Handle;
-        if (h == IntPtr.Zero) return;
-        // Skip while fullscreen owns THIS window's monitor — OnFullscreenChanged
-        // already demoted us there and re-promoting here would fight that. A
-        // different monitor being fullscreen doesn't affect this window.
-        if (FullscreenWatcher.IsFullscreenOnWindowsMonitor(h)) return;
-        // SWP_NOMOVE | SWP_NOSIZE — only touch Z-order. SWP_NOACTIVATE so the
-        // dock never takes focus when reasserting (matches WS_EX_NOACTIVATE).
-        NativeMethods.SetWindowPos(h, NativeMethods.HWND_TOPMOST, 0, 0, 0, 0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        if (_positionRestored && !_appBarMode) SaveFloatingPosition();
+        base.OnClosing(e);
     }
 
     /// <summary>Step aside like the system taskbar does — drop out of the
@@ -263,7 +346,13 @@ public partial class ProfileDockWindow : Window
     {
         var h = new WindowInteropHelper(this).Handle;
         if (h == IntPtr.Zero) return;
-        ApplyFullscreenZOrder(h, FullscreenWatcher.IsFullscreenOnWindowsMonitor(h));
+        bool fullscreen = FullscreenWatcher.IsFullscreenOnWindowsMonitor(h);
+        // Another monitor changing state must not raise this dock over overlays.
+        if (fullscreen == _fullscreenDemoted) return;
+        _fullscreenDemoted = fullscreen;
+        ApplyFullscreenZOrder(h, fullscreen);
+        MagiDesk.Infrastructure.DiagnosticLog.Write(
+            $"DOCK-ZORDER fullscreen={fullscreen} monitor={MonitorId}");
     }
 
     private static void ApplyFullscreenZOrder(IntPtr h, bool fs)
@@ -307,6 +396,10 @@ public partial class ProfileDockWindow : Window
             ButtonPanel.Children.Add(groupContainer);
         }
 
+        // Picks up a changed BrowserDockTheme (the service rebuilds on config save).
+        ApplyTheme();
+        ApplyButtonAlignment();
+
         // Button size / group layout may have changed the strip height — re-reserve.
         if (_appBarMode) RepositionAppBar();
     }
@@ -319,12 +412,9 @@ public partial class ProfileDockWindow : Window
                 ButtonPanel.Children.Add(new Border { Width = 14 });
                 break;
             case DockGroupSeparator.Line:
-                ButtonPanel.Children.Add(new Border
-                {
-                    Width  = 1,
-                    Margin = new Thickness(8, 4, 8, 4),
-                    Background = new SolidColorBrush(Color.FromArgb(0x50, 0xFF, 0xFF, 0xFF)),
-                });
+                var line = new Border { Width = 1, Margin = new Thickness(8, 6, 8, 6) };
+                line.SetResourceReference(Border.BackgroundProperty, "DockSeparatorBrush");
+                ButtonPanel.Children.Add(line);
                 break;
             case DockGroupSeparator.Label:
             case DockGroupSeparator.Bordered:
@@ -355,39 +445,38 @@ public partial class ProfileDockWindow : Window
             // Name text + buttons, wrapped in a subtle rounded border so the
             // label is clearly tied to its group rather than floating.
             var stack = new StackPanel { Orientation = Orientation.Vertical };
-            stack.Children.Add(new TextBlock
+            var label = new TextBlock
             {
                 Text = groupName,
                 FontSize = 10,
                 FontWeight = FontWeights.SemiBold,
-                Foreground = new SolidColorBrush(Color.FromArgb(0xC0, 0xFF, 0xFF, 0xFF)),
+                Opacity = 0.75,
                 HorizontalAlignment = HorizontalAlignment.Center,
                 Margin = new Thickness(0, 0, 0, 2),
-            });
+            };
+            label.SetResourceReference(TextBlock.ForegroundProperty, "DockTextBrush");
+            stack.Children.Add(label);
             stack.Children.Add(row);
-            return new Border
-            {
-                CornerRadius    = new CornerRadius(6),
-                Padding         = new Thickness(4, 2, 4, 2),
-                Background      = new SolidColorBrush(Color.FromArgb(0x25, 0xFF, 0xFF, 0xFF)),
-                BorderBrush     = new SolidColorBrush(Color.FromArgb(0x35, 0xFF, 0xFF, 0xFF)),
-                BorderThickness = new Thickness(1),
-                Child           = stack,
-            };
+            return ThemedGroupBox(stack);
         }
-        if (separator == DockGroupSeparator.Bordered)
-        {
-            return new Border
-            {
-                CornerRadius    = new CornerRadius(6),
-                Padding         = new Thickness(4, 2, 4, 2),
-                Background      = new SolidColorBrush(Color.FromArgb(0x30, 0xFF, 0xFF, 0xFF)),
-                BorderBrush     = new SolidColorBrush(Color.FromArgb(0x40, 0xFF, 0xFF, 0xFF)),
-                BorderThickness = new Thickness(1),
-                Child           = row,
-            };
-        }
+        if (separator == DockGroupSeparator.Bordered) return ThemedGroupBox(row);
         return row;
+    }
+
+    /// <summary>Rounded, tinted container used by the Label / Bordered group
+    /// styles. Brushes follow the dock theme.</summary>
+    private static Border ThemedGroupBox(UIElement child)
+    {
+        var box = new Border
+        {
+            CornerRadius    = new CornerRadius(6),
+            Padding         = new Thickness(4, 2, 4, 2),
+            BorderThickness = new Thickness(1),
+            Child           = child,
+        };
+        box.SetResourceReference(Border.BackgroundProperty,  "DockGroupBgBrush");
+        box.SetResourceReference(Border.BorderBrushProperty, "DockGroupBorderBrush");
+        return box;
     }
 
     /// <summary>Apply per-profile state indicators. <paramref name="states"/>
@@ -395,55 +484,49 @@ public partial class ProfileDockWindow : Window
     /// Profiles missing from the map render no indicator.</summary>
     public void UpdateStates(IReadOnlyDictionary<string, (bool HasWindows, bool IsForeground)> states)
     {
-        var accent   = GetAccentColor();
-        var tintFg   = new SolidColorBrush(Color.FromArgb(0x50, accent.R, accent.G, accent.B));
-        var strokeFg = new SolidColorBrush(Color.FromArgb(0xFF, accent.R, accent.G, accent.B));
-        var strokeRun= new SolidColorBrush(Color.FromArgb(0xA0, accent.R, accent.G, accent.B));
+        _lastStates = states;
+        var palette = DockPalette.For(AppConfig.Current);
+        var accent  = DockPalette.Accent();
+        // Active: accent pill + a light wash behind the icon. Running-but-not-
+        // focused: short neutral pill, no wash — the taskbar's own vocabulary.
+        var washFg  = Frozen(Color.FromArgb(0x38, accent.R, accent.G, accent.B));
+        var pillFg  = Frozen(accent);
+        var pillRun = Frozen(palette.IndicatorIdle);
 
         foreach (var (dir, rect) in _indicators)
         {
             var wrapper = _buttonWrappers[dir];
             if (!states.TryGetValue(dir, out var s) || !s.HasWindows)
             {
-                rect.Visibility   = Visibility.Hidden;
+                rect.Visibility    = Visibility.Hidden;
                 wrapper.Background = System.Windows.Media.Brushes.Transparent;
                 continue;
             }
             rect.Visibility = Visibility.Visible;
-            // Height stays 4 in both states (space is already reserved even
-            // when Hidden) — only width and color change.
+            // The slot is reserved even when hidden, so only width/colour change.
             if (s.IsForeground)
             {
-                rect.Width   = rect.Tag is double full ? full : double.NaN;
-                rect.Fill    = strokeFg;
-                wrapper.Background = tintFg;
+                rect.Width         = rect.Tag is double full ? full : double.NaN;
+                rect.Fill          = pillFg;
+                wrapper.Background = washFg;
             }
             else
             {
-                rect.Width   = rect.Tag is double full2 ? full2 * 0.3 : double.NaN;
-                rect.Fill    = strokeRun;
+                rect.Width         = IdlePillWidth;
+                rect.Fill          = pillRun;
                 wrapper.Background = System.Windows.Media.Brushes.Transparent;
             }
         }
     }
 
-    private static Color GetAccentColor()
+    private static SolidColorBrush Frozen(Color c)
     {
-        try
-        {
-            using var k = Microsoft.Win32.Registry.CurrentUser
-                .OpenSubKey(@"Software\Microsoft\Windows\DWM");
-            if (k?.GetValue("AccentColor") is int raw)
-            {
-                uint v = (uint)raw;
-                byte a = (byte)((v >> 24) & 0xFF);
-                return Color.FromArgb(a == 0 ? (byte)0xFF : a,
-                    (byte)(v & 0xFF), (byte)((v >> 8) & 0xFF), (byte)((v >> 16) & 0xFF));
-            }
-        }
-        catch { }
-        return Color.FromRgb(0x00, 0x78, 0xD4);
+        var b = new SolidColorBrush(c);
+        b.Freeze();
+        return b;
     }
+
+    private IReadOnlyDictionary<string, (bool HasWindows, bool IsForeground)>? _lastStates;
 
     private Button BuildProfileButton(ChromeProfile p, BrowserProfileSettings s, int size)
     {
@@ -476,14 +559,15 @@ public partial class ProfileDockWindow : Window
         // "foreground" uses width + color, not height.
         var indicator = new System.Windows.Shapes.Rectangle
         {
-            Height = 4,
-            Width  = size * 0.3,
+            Height = PillHeight,
+            Width  = IdlePillWidth,
             HorizontalAlignment = HorizontalAlignment.Center,
-            Margin     = new Thickness(0, 2, 0, 0),
-            RadiusX    = 2,
-            RadiusY    = 2,
+            Margin     = new Thickness(0, 3, 0, 0),
+            RadiusX    = PillHeight / 2,
+            RadiusY    = PillHeight / 2,
             Visibility = Visibility.Hidden,
-            Tag        = (double)size,  // stash full bar width for foreground state
+            // Active pill length, tracking icon size within taskbar-ish bounds.
+            Tag        = Math.Clamp(size * 0.5, 12.0, 18.0),
         };
         _indicators[p.Key] = indicator;
 
@@ -496,8 +580,8 @@ public partial class ProfileDockWindow : Window
         // cue than the thin indicator bar alone).
         var wrapper = new Border
         {
-            CornerRadius = new CornerRadius(4),
-            Padding      = new Thickness(4, 3, 4, 2),
+            CornerRadius = new CornerRadius(5),
+            Padding      = new Thickness(5, 4, 5, 3),
             Background   = System.Windows.Media.Brushes.Transparent,
             Child        = stack,
         };
@@ -505,18 +589,15 @@ public partial class ProfileDockWindow : Window
 
         var btn = new Button
         {
+            Style   = (Style)FindResource("DockButtonStyle"),
             Content = wrapper,
-            Padding = new Thickness(0),
             Margin  = new Thickness(2, 0, 2, 0),
-            BorderThickness = new Thickness(0),
-            Background = System.Windows.Media.Brushes.Transparent,
-            Cursor = Cursors.Hand,
+            Cursor  = Cursors.Hand,
             ToolTip = $"{p.Name} · {p.Browser.DisplayName}",
-            VerticalContentAlignment = VerticalAlignment.Top,
             ContextMenu = BuildProfileContextMenu(p, s),
             AllowDrop = true,
         };
-        btn.Click += (_, _) => ProfileClicked?.Invoke(p);
+        btn.Click += (_, _) => ProfileClicked?.Invoke(p, btn);
         AttachDragDrop(btn, p.Key);
         return btn;
     }
@@ -819,12 +900,7 @@ public partial class ProfileDockWindow : Window
         {
             try
             {
-                var bmp = new System.Windows.Media.Imaging.BitmapImage();
-                bmp.BeginInit();
-                bmp.CacheOption = System.Windows.Media.Imaging.BitmapCacheOption.OnLoad;
-                bmp.UriSource = new Uri(cp);
-                bmp.EndInit();
-                bmp.Freeze();
+                var bmp = AvatarImageLoader.Load(cp, size, VisualTreeHelper.GetDpi(host).DpiScaleX);
                 host.Background = new ImageBrush(bmp) { Stretch = Stretch.UniformToFill };
                 text.Text = string.Empty;
                 BadgeWindow.RenderOverlay(overlay, s, BadgeWindow.DefaultAvatarBg, size, edgeToEdge);
@@ -854,12 +930,7 @@ public partial class ProfileDockWindow : Window
         {
             try
             {
-                var bmp = new System.Windows.Media.Imaging.BitmapImage();
-                bmp.BeginInit();
-                bmp.CacheOption = System.Windows.Media.Imaging.BitmapCacheOption.OnLoad;
-                bmp.UriSource = new Uri(p.GaiaPicturePath);
-                bmp.EndInit();
-                bmp.Freeze();
+                var bmp = AvatarImageLoader.Load(p.GaiaPicturePath, size, VisualTreeHelper.GetDpi(host).DpiScaleX);
                 host.Background = new ImageBrush(bmp) { Stretch = Stretch.UniformToFill };
                 text.Text = string.Empty;
                 BadgeWindow.RenderOverlay(overlay, s, primary, size, edgeToEdge);
@@ -889,6 +960,7 @@ public partial class ProfileDockWindow : Window
         _dragStartWinX = wr.Left;
         _dragStartWinY = wr.Top;
         _dragging = true;
+        MagiDesk.Infrastructure.DiagnosticLog.Write($"DOCK-POS drag-start x={wr.Left} y={wr.Top}\n");
         DockRoot.CaptureMouse();
         e.Handled = true;
     }
@@ -910,31 +982,28 @@ public partial class ProfileDockWindow : Window
     private void Dock_MouseUp(object sender, MouseButtonEventArgs e)
     {
         if (!_dragging) return;
-        _dragging = false;
+        FinishPositionDrag();
         DockRoot.ReleaseMouseCapture();
-
-        // Save new position so the dock comes back here on restart.
-        var hwnd = new WindowInteropHelper(this).Handle;
-        if (hwnd == IntPtr.Zero) return;
-        if (!NativeMethods.GetWindowRect(hwnd, out var wr)) return;
-        if (PerMonitorPosition && MonitorId is not null)
-        {
-            // Monitor-bound: persist absolute device pixels keyed by monitor, so
-            // restore is DPI-exact and independent of the other monitors.
-            AppConfig.Current.BrowserDockMonitorPositions[MonitorId] =
-                new DockPoint { X = wr.Left, Y = wr.Top };
-        }
-        else
-        {
-            // Legacy free-drag path: DIPs, single global position.
-            var src = PresentationSource.FromVisual(this);
-            double sX = src?.CompositionTarget?.TransformToDevice.M11 ?? 1.0;
-            double sY = src?.CompositionTarget?.TransformToDevice.M22 ?? 1.0;
-            AppConfig.Current.BrowserDockX = wr.Left / sX;
-            AppConfig.Current.BrowserDockY = wr.Top  / sY;
-        }
-        AppConfig.Current.Save();
         e.Handled = true;
+    }
+
+    private void FinishPositionDrag()
+    {
+        if (!_dragging) return;
+        _dragging = false;
+        SaveFloatingPosition();
+    }
+
+    private void SaveFloatingPosition()
+    {
+        if (_appBarMode) return;
+        var hwnd = new WindowInteropHelper(this).Handle;
+        if (hwnd == IntPtr.Zero || !NativeMethods.GetWindowRect(hwnd, out var wr)) return;
+        var point = new DockPoint { X = wr.Left, Y = wr.Top };
+        DockPositionMemory.Store(AppConfig.Current, PerMonitorPosition, MonitorId, point);
+        SavedPositionPx = point;
+        AppConfig.Current.Save();
+        MagiDesk.Infrastructure.DiagnosticLog.Write($"DOCK-POS save monitor={MonitorId} bound={PerMonitorPosition} x={point.X} y={point.Y}\n");
     }
 
     // ---------------------------------------------------------- helpers

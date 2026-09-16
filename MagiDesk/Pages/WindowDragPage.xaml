@@ -180,7 +180,7 @@
                         </Grid.ColumnDefinitions>
                         <StackPanel Grid.Column="0" VerticalAlignment="Center">
                             <TextBlock Text="边缘吸附（磁吸）" FontWeight="SemiBold"/>
-                            <TextBlock Text="移动窗口时，边缘靠近显示器边、其他窗口边或对齐线会实时吸附。仅在移动拖动时生效，缩放不受影响。"
+                            <TextBlock Text="按住移动修饰键拖动时，靠近工作区边缘或相邻窗口会吸附。吸附时显示参考线；松开修饰键或按住 Shift 暂停吸附。缩放不受影响。"
                                        FontSize="12"
                                        Foreground="{DynamicResource TextFillColorSecondaryBrush}"
                                        TextWrapping="Wrap"
@@ -200,7 +200,7 @@
                             </Grid.ColumnDefinitions>
                             <StackPanel Grid.Column="0" VerticalAlignment="Center">
                                 <TextBlock Text="吸附距离"/>
-                                <TextBlock Text="边缘进入这个像素范围内就吸附。"
+                                <TextBlock Text="以物理像素计算；边缘进入此范围时吸附。"
                                            FontSize="12"
                                            Foreground="{DynamicResource TextFillColorSecondaryBrush}"
                                            Margin="0,2,0,0"/>
@@ -229,7 +229,7 @@
                                 <ColumnDefinition Width="*"/>
                                 <ColumnDefinition Width="Auto"/>
                             </Grid.ColumnDefinitions>
-                            <TextBlock Grid.Column="0" Text="其他窗口外边缘（贴合）" VerticalAlignment="Center"/>
+                            <TextBlock Grid.Column="0" Text="其他窗口边缘（贴合 / 边缘对齐）" VerticalAlignment="Center"/>
                             <ui:ToggleSwitch x:Name="TsSnapWindowEdges" Grid.Column="1"
                                              VerticalAlignment="Center"
                                              Checked="EdgeSnapTarget_Changed" Unchecked="EdgeSnapTarget_Changed"/>
@@ -239,8 +239,8 @@
                                 <ColumnDefinition Width="*"/>
                                 <ColumnDefinition Width="Auto"/>
                             </Grid.ColumnDefinitions>
-                            <TextBlock Grid.Column="0" Text="相邻窗口对齐线（边 / 中线）" VerticalAlignment="Center"/>
-                            <ui:ToggleSwitch x:Name="TsSnapWindowAlign" Grid.Column="1"
+                            <TextBlock Grid.Column="0" Text="相邻窗口中心线" ToolTip="对齐相邻窗口的水平或垂直中心线，默认关闭。" VerticalAlignment="Center"/>
+                            <ui:ToggleSwitch x:Name="TsSnapWindowCenters" Grid.Column="1"
                                              VerticalAlignment="Center"
                                              Checked="EdgeSnapTarget_Changed" Unchecked="EdgeSnapTarget_Changed"/>
                         </Grid>

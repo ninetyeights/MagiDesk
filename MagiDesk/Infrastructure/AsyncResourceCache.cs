@@ -118,6 +118,16 @@ internal sealed class AsyncResourceCache<T> where T : class
         }
     }
 
+    public void InvalidateWhere(Func<string, bool> matches)
+    {
+        lock (_sync)
+        {
+            foreach (var key in _cache.Keys.Where(matches).ToArray()) RemoveCached(key);
+            foreach (var key in _pending.Keys.Where(matches).ToArray())
+                if (_pending.Remove(key, out var entry)) entry.Stop.Cancel();
+        }
+    }
+
     private void RemoveCached(string key)
     {
         if (!_cache.Remove(key, out var old)) return;

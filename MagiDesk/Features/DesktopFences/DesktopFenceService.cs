@@ -10,25 +10,76 @@ namespace MagiDesk.Features.DesktopFences;
 
 /// <summary>
 /// Owns the custom-rendered desktop fences (architecture B). While enabled it
-/// hides the system desktop icons and shows one window per <see cref="DesktopBox"/>;
+/// normally leaves system icons unchanged; the opt-in unified surface replaces
+/// the icon layer and renders loose files separately from <see cref="DesktopBox"/> windows.
 /// each box renders its member items, and a single "unsorted" box catches
 /// everything not placed elsewhere. Box add/delete/rename and item assignment go
 /// through this service, which re-renders explicitly — box rect saves persist
 /// without a re-render (they don't change membership).
 /// </summary>
-public sealed class DesktopFenceService : IDisposable
+public sealed partial class DesktopFenceService : IDisposable
 {
     private readonly Dispatcher _ui;
     private readonly Dictionary<string, FenceBoxWindow> _windows = new();
     private readonly MagiDesk.Infrastructure.RefreshVersion _renderVersion = new();
     private bool _active;
-    private bool _iconsHidden;
+    private bool _disposed;
+    private string? _frontBoxId;
+    private bool _boxOrderQueued;
+    private bool _applyingBoxOrder;
+
+    internal void BringBoxForward(string id, string source = "request")
+    {
+        if (_applyingBoxOrder) return;
+        if (_frontBoxId != id)
+            MagiDesk.Infrastructure.DiagnosticLog.Write($"FENCE-ORDER request box={id} source={source}\n");
+        _frontBoxId = id;
+        if (_boxOrderQueued) return;
+        _boxOrderQueued = true;
+        // Activation can subsequently send another WINDOWPOSCHANGING. Apply
+        // the group order after that transaction, without activating anything.
+        _ui.BeginInvoke(new Action(() =>
+        {
+            _boxOrderQueued = false;
+            if (_disposed || !_active || _frontBoxId is null || !_windows.TryGetValue(_frontBoxId, out var front)) return;
+            var hwnd = new System.Windows.Interop.WindowInteropHelper(front).Handle;
+            uint flags = NativeConstants.SWP_NOMOVE | NativeConstants.SWP_NOSIZE | NativeConstants.SWP_NOACTIVATE;
+            if (IsPeeking)
+            {
+                NativeMethods.SetWindowPos(hwnd, NativeMethods.HWND_TOPMOST, 0, 0, 0, 0, flags);
+                return;
+            }
+            // Never sink the clicked box: doing so temporarily exposes a lower
+            // box during rapid clicks. Only move boxes that are actually above it.
+            var above = new HashSet<IntPtr>();
+            for (var current = NativeMethods.GetWindow(hwnd, 3 /* GW_HWNDPREV */);
+                current != IntPtr.Zero && above.Count < 4096 && above.Add(current);
+                current = NativeMethods.GetWindow(current, 3)) { }
+            _applyingBoxOrder = true;
+            int moved = 0;
+            try
+            {
+                foreach (var other in _windows.Values)
+                {
+                    if (ReferenceEquals(other, front) || !other.IsVisible) continue;
+                    var otherHandle = new System.Windows.Interop.WindowInteropHelper(other).Handle;
+                    if (!above.Contains(otherHandle)) continue;
+                    other.PlaceOnDesktop();
+                    moved++;
+                }
+            }
+            finally { _applyingBoxOrder = false; }
+            if (moved > 0)
+                MagiDesk.Infrastructure.DiagnosticLog.Write($"FENCE-ORDER applied hwnd={hwnd} lowered={moved}\n");
+        }), DispatcherPriority.Input);
+    }
 
     public DesktopFenceService(Dispatcher ui) { _ui = ui; }
 
     public void Start()
     {
         AppConfig.Changed += OnConfigChanged;
+        StartHotkey();
         // Defer the initial show until the app is idle — i.e. AFTER the main
         // window has loaded and WPF-UI's theme manager has done its one-time
         // "apply a Mica backdrop to every window" pass. If the boxes existed
@@ -40,7 +91,9 @@ public sealed class DesktopFenceService : IDisposable
 
     public void Dispose()
     {
+        _disposed = true;
         AppConfig.Changed -= OnConfigChanged;
+        DisposeHotkey();
         Deactivate();
     }
 
@@ -48,9 +101,12 @@ public sealed class DesktopFenceService : IDisposable
     // explicit mutators below so a box rect save doesn't trigger a full re-render.
     private void OnConfigChanged() => _ui.BeginInvoke(new Action(() =>
     {
+        if (_disposed) return;
         bool enabled = AppConfig.Current.DesktopFencesEnabled;
+        if (_active && _unifiedSurface != AppConfig.Current.DesktopUnifiedSurface) Deactivate();
         if (enabled && !_active) Activate();
         else if (!enabled && _active) Deactivate();
+        ConfigureHotkey();
     }));
 
     /// <summary>Current boxes (for context menus etc.).</summary>
@@ -59,6 +115,18 @@ public sealed class DesktopFenceService : IDisposable
     /// <summary>Re-render all boxes (e.g. after a paste/new/delete changed the
     /// desktop, which has no live watcher of its own).</summary>
     public void RefreshBoxes() { if (_active) Render(); }
+
+    internal IReadOnlyList<DesktopItem> ResolveBoxItems(DesktopBox box, IReadOnlyList<DesktopItem> items)
+        => ResolveBoxItems(box, items, Boxes);
+
+    internal static IReadOnlyList<DesktopItem> ResolveBoxItems(DesktopBox box,
+        IReadOnlyList<DesktopItem> items, IReadOnlyList<DesktopBox> boxes)
+    {
+        var paths = box.IsUnsorted
+            ? new HashSet<string>(boxes.Where(b => !b.IsUnsorted && b.FolderPath is null).SelectMany(b => b.Members), StringComparer.OrdinalIgnoreCase)
+            : new HashSet<string>(box.Members, StringComparer.OrdinalIgnoreCase);
+        return items.Where(item => box.IsUnsorted ? !paths.Contains(item.Path) : paths.Contains(item.Path)).ToList();
+    }
 
     /// <summary>Live on-screen rects (DIPs) of the other boxes — used as snap
     /// targets while one box is dragged.</summary>
@@ -106,13 +174,13 @@ public sealed class DesktopFenceService : IDisposable
 
     private void Activate()
     {
+        if (_disposed || _active || !AppConfig.Current.DesktopFencesEnabled) return;
         _active = true;
-        if (DesktopIcons.AreIconsShown())
-        {
-            DesktopIcons.ToggleShowIcons();
-            _iconsHidden = true;
-        }
+        _unifiedSurface = AppConfig.Current.DesktopUnifiedSurface;
+        if (DesktopTabMigration.ConvertToBoxes(AppConfig.Current.DesktopBoxes))
+            AppConfig.Current.Save();
         EnsureUnsorted();
+        if (_unifiedSurface) StartDesktopSurfaceWatching();
         Render();
 
         // Warm the shell context-menu extensions so the first right-click on a
@@ -140,23 +208,20 @@ public sealed class DesktopFenceService : IDisposable
             var desktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
             var sample = Directory.EnumerateFileSystemEntries(desktop)
                 .FirstOrDefault(p => !Path.GetFileName(p).Equals("desktop.ini", StringComparison.OrdinalIgnoreCase));
-            ShellContextMenu.Prewarm(sample ?? desktop);
+            ShellContextMenu.RequestPrewarm(sample ?? desktop, sample is null || Directory.Exists(sample));
         }
         catch { }
     }
 
     private void Deactivate()
     {
+        DismissPeek(false);
         _active = false;
+        StopDesktopSurface();
         _renderVersion.Next();
         FullscreenWatcher.Changed -= OnFullscreenChanged;
         foreach (var w in _windows.Values) { try { w.Close(); } catch { } }
         _windows.Clear();
-        if (_iconsHidden)
-        {
-            DesktopIcons.ToggleShowIcons();
-            _iconsHidden = false;
-        }
     }
 
     // ------------------------------------------------------------ fullscreen
@@ -173,6 +238,7 @@ public sealed class DesktopFenceService : IDisposable
 
     private void SinkFullscreenBoxes()
     {
+        if (IsPeeking) return;
         foreach (var w in _windows.Values) SinkBoxIfItsMonitorIsFullscreen(w);
     }
 
@@ -180,15 +246,22 @@ public sealed class DesktopFenceService : IDisposable
     {
         var h = new System.Windows.Interop.WindowInteropHelper(w).Handle;
         if (h == IntPtr.Zero || !FullscreenWatcher.IsFullscreenOnWindowsMonitor(h)) return;
-        NativeMethods.SetWindowPos(h, NativeMethods.HWND_BOTTOM, 0, 0, 0, 0,
-            NativeConstants.SWP_NOMOVE | NativeConstants.SWP_NOSIZE | NativeConstants.SWP_NOACTIVATE);
+        w.PlaceOnDesktop();
     }
 
     private static void EnsureUnsorted()
     {
         var boxes = AppConfig.Current.DesktopBoxes;
-        if (boxes.Any(b => b.IsUnsorted)) return;
-        boxes.Insert(0, new DesktopBox { Name = "未整理", IsUnsorted = true, X = 200, Y = 200, W = 460, H = 380 });
+        if (boxes.FirstOrDefault(b => b.IsUnsorted) is { } desktop)
+        {
+            if (desktop.Name == "未整理")
+            {
+                desktop.Name = "桌面";
+                AppConfig.Current.Save();
+            }
+            return;
+        }
+        boxes.Insert(0, new DesktopBox { Name = "桌面", IsUnsorted = true, X = 200, Y = 200, W = 460, H = 380 });
         AppConfig.Current.Save();
     }
 
@@ -253,6 +326,20 @@ public sealed class DesktopFenceService : IDisposable
     public void SetBoxShowLabels(string id, bool show)        => Relayout(id, b => b.ShowLabels = show);
     public void SetBoxTransparency(string id, int percent)    => Relayout(id, b => b.Transparency = Math.Clamp(percent, 0, 90), appearanceOnly: true);
     public void SetBoxColor(string id, string? hex)           => Relayout(id, b => b.BgColorHex = hex, appearanceOnly: true);
+    public void SetBoxBlur(string id, int mode) => Relayout(id, b => b.BackgroundBlur = mode > 0 ? 1 : 0, appearanceOnly: true);
+    public void SetBoxBorder(string id, bool show) => Relayout(id, b => b.ShowBorder = show, appearanceOnly: true);
+    public void SetBoxRoundedCorners(string id, bool rounded) => Relayout(id, b => b.RoundedCorners = rounded, appearanceOnly: true);
+
+    internal void UpdateBoxAppearances(IReadOnlyCollection<string> ids, Action<DesktopBox> change)
+    {
+        var boxes = AppConfig.Current.DesktopBoxes.Where(b => ids.Contains(b.Id)).ToArray();
+        if (boxes.Length == 0) return;
+        foreach (var box in boxes) change(box);
+        AppConfig.Current.Save();
+        if (!_active) return;
+        foreach (var box in boxes)
+            if (_windows.TryGetValue(box.Id, out var window)) window.RefreshAppearance();
+    }
 
     private void Relayout(string id, Action<DesktopBox> change, bool appearanceOnly = false)
     {
@@ -278,12 +365,39 @@ public sealed class DesktopFenceService : IDisposable
     /// <summary>Place <paramref name="path"/> into the box with <paramref name="boxId"/>.
     /// Assigning to the unsorted box just removes it from all others.</summary>
     public void AssignItem(string path, string boxId)
+        => AssignItems(new[] { path }, boxId);
+
+    internal void AssignItems(IEnumerable<string> paths, string boxId)
     {
         var boxes = AppConfig.Current.DesktopBoxes;
-        foreach (var b in boxes)
-            b.Members.RemoveAll(p => p.Equals(path, StringComparison.OrdinalIgnoreCase));
         var target = boxes.FirstOrDefault(b => b.Id == boxId);
-        if (target is not null && !target.IsUnsorted) target.Members.Add(path);
+        if (target is null || target.FolderPath is not null) return;
+        foreach (var path in paths.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            foreach (var b in boxes)
+                b.Members.RemoveAll(p => p.Equals(path, StringComparison.OrdinalIgnoreCase));
+            if (!target.IsUnsorted) target.Members.Add(path);
+        }
+        AppConfig.Current.Save();
+        if (_active) Render();
+    }
+
+    public void RenameItem(string source, string name)
+    {
+        string target = FenceRename.Target(source, name);
+        if (source == target) return;
+        if (Directory.Exists(source)) Directory.Move(source, target);
+        else File.Move(source, target); // Never overwrite a different file.
+        string Remap(string path) => path.Equals(source, StringComparison.OrdinalIgnoreCase) ? target
+            : path.StartsWith(source + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
+                ? target + path[source.Length..] : path;
+        foreach (var box in AppConfig.Current.DesktopBoxes)
+        {
+            for (int i = 0; i < box.Members.Count; i++) box.Members[i] = Remap(box.Members[i]);
+            if (box.FolderPath is { } folder) box.FolderPath = Remap(folder);
+            if (_windows.TryGetValue(box.Id, out var window)) window.RemapNavigation(Remap);
+        }
+        ThumbnailLoader.Invalidate(source);
         AppConfig.Current.Save();
         if (_active) Render();
     }
@@ -307,21 +421,25 @@ public sealed class DesktopFenceService : IDisposable
 
         // Window lifecycle (create/close) runs on the UI thread from the box list
         // alone — no enumeration needed. Folder boxes fill themselves (async).
-        var live = cfg.DesktopBoxes.Select(b => b.Id).ToHashSet();
+        var visibleBoxes = cfg.DesktopBoxes.Where(b => !_unifiedSurface || !b.IsUnsorted).ToList();
+        var live = visibleBoxes.Select(b => b.Id).ToHashSet();
         foreach (var id in _windows.Keys.Where(k => !live.Contains(k)).ToList())
         {
             try { _windows[id].Close(); } catch { }
             _windows.Remove(id);
         }
 
-        foreach (var box in cfg.DesktopBoxes)
+        foreach (var box in visibleBoxes)
         {
             if (!_windows.TryGetValue(box.Id, out var win))
             {
                 win = new FenceBoxWindow(box, this);
                 _windows[box.Id] = win;
+                win.Deactivated += (_, _) => CheckPeekFocus();
                 win.Show();
-                SinkBoxIfItsMonitorIsFullscreen(win);   // box added mid-fullscreen
+                if (IsPeeking) win.SetPeek(true);
+                else win.PlaceOnDesktop();
+                if (!IsPeeking) SinkBoxIfItsMonitorIsFullscreen(win);   // box added mid-fullscreen
             }
             if (box.FolderPath is not null) win.RefreshFolder(); // folder portal (async)
         }
@@ -329,7 +447,8 @@ public sealed class DesktopFenceService : IDisposable
         // Non-folder boxes need the desktop enumeration (a shell call per item) —
         // do it off the UI thread, then fill each box back on the UI thread.
         if (!cfg.DesktopBoxes.Any(b => b.FolderPath is null)) return;
-        Task.Run(() => DesktopItems.Enumerate()).ContinueWith(t =>
+        bool includeShellItems = _unifiedSurface;
+        Task.Run(() => DesktopItems.Enumerate(includeShellItems)).ContinueWith(t =>
         {
             if (t.IsFaulted)
             {
@@ -340,20 +459,12 @@ public sealed class DesktopFenceService : IDisposable
             if (t.IsCanceled) return;
             if (!_active || !_renderVersion.IsCurrent(version)) return;
             var items = t.Result;
-            var byPath = new Dictionary<string, DesktopItem>(StringComparer.OrdinalIgnoreCase);
-            foreach (var it in items) byPath[it.Path] = it;
-            var assigned = new HashSet<string>(
-                cfg.DesktopBoxes.Where(b => !b.IsUnsorted).SelectMany(b => b.Members),
-                StringComparer.OrdinalIgnoreCase);
-
+            if (_unifiedSurface) RenderDesktopSurface(items);
             foreach (var box in cfg.DesktopBoxes)
             {
                 if (box.FolderPath is not null) continue;
                 if (!_windows.TryGetValue(box.Id, out var win)) continue;
-                List<DesktopItem> boxItems = box.IsUnsorted
-                    ? items.Where(i => !assigned.Contains(i.Path)).ToList()
-                    : box.Members.Where(byPath.ContainsKey).Select(p => byPath[p]).ToList();
-                win.Render(boxItems);
+                win.Render(ResolveBoxItems(box, items));
             }
         }, CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.FromCurrentSynchronizationContext());
     }

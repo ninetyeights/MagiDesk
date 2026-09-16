@@ -12,17 +12,28 @@
         <Grid Margin="16,16,20,16">
             <StackPanel HorizontalAlignment="Stretch" MaxWidth="1100">
                 <TextBlock Text="桌面盒子（开发中）" FontSize="28" FontWeight="SemiBold"/>
-                <TextBlock Text="Fences / Coodesker 式桌面整理。启用后隐藏系统桌面图标，改用自绘的盒子显示它们；关闭即恢复系统图标。当前是单个「桌面」盒子装全部项，多盒子/分类稍后做。"
+                <TextBlock Text="Fences / Coodesker 式桌面整理。使用独立盒子整理文件或映射文件夹，可试用统一桌面显示。"
                            Foreground="{DynamicResource TextFillColorSecondaryBrush}"
                            TextWrapping="Wrap"
                            Margin="0,2,0,16"/>
 
-                <ui:InfoBar HorizontalAlignment="Stretch"
-                            IsOpen="True" IsClosable="False"
-                            Severity="Warning"
-                            Title="会隐藏系统桌面图标"
-                            Message="启用时会把 Windows 桌面图标隐藏（改由盒子显示），关闭时恢复。若程序异常退出导致图标没恢复，右键桌面→查看→显示桌面图标即可手动恢复。"
-                            Margin="0,0,0,12"/>
+                <ui:Card HorizontalAlignment="Stretch" Padding="18,16" Margin="0,0,0,12">
+                    <StackPanel>
+                        <ui:ToggleSwitch x:Name="TsUnifiedSurface" Content="统一桌面显示（实验）"
+                                         Checked="UnifiedSurface_Changed" Unchecked="UnifiedSurface_Changed"/>
+                        <TextBlock Text="启用盒子后，未归类文件显示在主屏桌面，已归类文件仅显示在盒子内，文件路径不变。关闭此开关或退出软件可恢复系统图标。回收站、此电脑等图标跟随系统桌面图标设置。首版按列排列，不保留原图标坐标，暂不支持多屏分配和自由摆放。"
+                                   TextWrapping="Wrap" Margin="0,4,0,14"/>
+                        <TextBlock Text="临时唤出盒子" FontWeight="SemiBold"/>
+                        <TextBlock Text="启用桌面盒子后，按热键临时显示在应用上方。再次按热键、Esc 或切换到其他应用后回到桌面。方向键选择，Tab 切换盒子，Enter 打开。"
+                                   TextWrapping="Wrap" Margin="0,4,0,10"/>
+                        <StackPanel Orientation="Horizontal">
+                            <ui:Button x:Name="BtnPeekHotkey" Content="Ctrl + Shift + F" Click="RecordPeekHotkey_Click" MinWidth="170"/>
+                            <ui:Button Content="重置" Click="ResetPeekHotkey_Click" Margin="8,0,0,0"/>
+                            <ui:Button Content="清除" Click="ClearPeekHotkey_Click" Margin="8,0,0,0"/>
+                        </StackPanel>
+                        <TextBlock x:Name="PeekHotkeyStatus" TextWrapping="Wrap" Margin="0,8,0,0"/>
+                    </StackPanel>
+                </ui:Card>
 
                 <ui:Card HorizontalAlignment="Stretch" Padding="18,16" Margin="0,0,0,12">
                     <Grid>
@@ -32,7 +43,7 @@
                         </Grid.ColumnDefinitions>
                         <StackPanel Grid.Column="0" VerticalAlignment="Center">
                             <TextBlock Text="启用桌面盒子" FontWeight="SemiBold"/>
-                            <TextBlock Text="隐藏系统图标，显示自绘盒子（图标双击可打开，盒子可拖动/缩放，位置会记住）。"
+                            <TextBlock Text="在桌面上显示盒子（图标双击可打开，盒子可拖动/缩放，位置会记住）。"
                                        FontSize="12"
                                        Foreground="{DynamicResource TextFillColorSecondaryBrush}"
                                        TextWrapping="Wrap"
@@ -52,7 +63,7 @@
                         </Grid.ColumnDefinitions>
                         <StackPanel Grid.Column="0" VerticalAlignment="Center">
                             <TextBlock Text="盒子" FontWeight="SemiBold"/>
-                            <TextBlock Text="新建盒子后，把图标拖进去（或右键图标「移动到」）分类。「映射文件夹」把任意文件夹镜像成盒子，双击子文件夹进入、返回键回上级。盒子 ☰ 菜单可改颜色/透明度/显示模式。"
+                            <TextBlock Text="新建盒子后，把图标拖进去（或右键图标「移动到」）分类。「映射文件夹」把任意文件夹镜像成盒子，双击子文件夹进入、返回键回上级。标题栏图标可切换显示模式，颜色和透明度在下方设置。"
                                        FontSize="12"
                                        Foreground="{DynamicResource TextFillColorSecondaryBrush}"
                                        TextWrapping="Wrap"
@@ -69,8 +80,60 @@
 
                 <ui:Card HorizontalAlignment="Stretch" Padding="18,16" Margin="0,0,0,12">
                     <StackPanel>
+                        <TextBlock Text="盒子外观" FontWeight="SemiBold"/>
+                        <TextBlock Text="选择单个盒子或全部盒子，调整外观。" Margin="0,4,0,12"/>
+                        <ComboBox x:Name="AppearanceBox" DisplayMemberPath="Name" SelectedValuePath="Id"
+                                  HorizontalAlignment="Stretch" SelectionChanged="AppearanceBox_Changed"/>
+                        <TextBlock x:Name="AppearanceEmpty" Text="暂无盒子，请先启用或新建盒子。" Margin="0,8,0,0"/>
+                        <TextBlock x:Name="AppearanceScopeHint" TextWrapping="Wrap" Margin="0,8,0,0"/>
+                        <StackPanel x:Name="AppearanceOptions" Margin="0,12,0,0">
+                            <TextBlock Text="透明度（0% 为不透明）" Margin="0,0,0,6"/>
+                            <TextBlock Text="{Binding Value, ElementName=AppearanceTransparency, StringFormat={}{0:F0}%}"/>
+                            <Slider x:Name="AppearanceTransparency" Minimum="0" Maximum="90" TickFrequency="1"
+                                    IsSnapToTickEnabled="True" ValueChanged="AppearanceTransparency_Changed"
+                                    LostMouseCapture="AppearanceTransparency_Committed"/>
+                            <TextBlock Text="背景色" Margin="0,12,0,6"/>
+                            <ComboBox x:Name="AppearanceColor" DisplayMemberPath="Label"
+                                      SelectionChanged="AppearanceColor_Changed"/>
+                            <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                                <Border x:Name="ColorPreview" Width="28" Height="28" CornerRadius="4" Margin="0,0,8,0"/>
+                                <TextBox x:Name="AppearanceHex" Width="120" MaxLength="7" ToolTip="#RRGGBB"
+                                         LostKeyboardFocus="AppearanceHex_Commit" KeyDown="AppearanceHex_KeyDown"/>
+                                <ui:Button Content="选择颜色…" Margin="8,0,0,0" Click="ChooseAppearanceColor_Click"/>
+                            </StackPanel>
+                            <TextBlock x:Name="ColorError" Text="请输入六位十六进制色值，例如 #2A4D6E。"
+                                       Visibility="Collapsed" TextWrapping="Wrap" Margin="0,6,0,0"/>
+                            <ui:ToggleSwitch x:Name="AppearanceBlur" Content="模糊" Margin="0,12,0,0"
+                                             Checked="AppearanceBlur_Changed" Unchecked="AppearanceBlur_Changed"/>
+                            <TextBlock Text="模糊由系统控制，不影响图标和文字的清晰度。实际效果取决于系统的透明效果设置。"
+                                       TextWrapping="Wrap" Margin="0,6,0,0" FontSize="12"/>
+                            <ui:ToggleSwitch x:Name="AppearanceBorder" Content="显示边框" Margin="0,12,0,0"
+                                             Checked="AppearanceBorder_Changed" Unchecked="AppearanceBorder_Changed"/>
+                            <ui:ToggleSwitch x:Name="AppearanceRoundedCorners" Content="显示圆角" Margin="0,12,0,0"
+                                             Checked="AppearanceRoundedCorners_Changed" Unchecked="AppearanceRoundedCorners_Changed"/>
+                            <TextBlock Text="Windows 11 使用系统合成实现模糊与圆角；旧版 Windows 的圆角仅在关闭模糊时生效。"
+                                       TextWrapping="Wrap" Margin="0,6,0,0" FontSize="12"/>
+                        </StackPanel>
+                    </StackPanel>
+                </ui:Card>
+
+                <ui:Card HorizontalAlignment="Stretch" Padding="18,16" Margin="0,0,0,12">
+                    <StackPanel>
                         <TextBlock Text="桌面项（调试）" FontWeight="SemiBold" Margin="0,0,0,8"/>
                         <ui:Button Content="列出桌面项" Padding="12,8" Click="BtnList_Click"/>
+                        <ui:Button x:Name="BtnVisibilityProbe" Content="测试原生桌面绘制接口" Padding="12,8"
+                                   Margin="0,8,0,0" Click="BtnVisibilityProbe_Click"/>
+                        <TextBlock Text="临时请求单图标绘制通知，5 秒后恢复并检查结果。本阶段不隐藏图标，不修改文件或图标位置。"
+                                   TextWrapping="Wrap" Margin="0,6,0,0" FontSize="12"/>
+                        <TextBlock x:Name="VisibilityProbeStatus" TextWrapping="Wrap" Margin="0,6,0,0"/>
+                        <TextBlock Text="单图标隐藏实验：填写桌面文件或文件夹的完整路径" Margin="0,12,0,4" TextWrapping="Wrap"/>
+                        <TextBox x:Name="ProbeTargetPath"/>
+                        <CheckBox x:Name="ProbeInteraction" Content="同时测试交互拦截（实验性，含虚拟列表选择修正）"
+                                  IsChecked="False" Margin="0,8,0,0"/>
+                        <ui:Button x:Name="BtnHideProbe" Content="临时隐藏指定图标（15 秒）" Padding="12,8"
+                                   Margin="0,8,0,0" Click="BtnVisibilityProbe_Click"/>
+                        <TextBlock Text="默认只验证视觉隐藏与恢复，隐藏位置仍可能响应操作。交互拦截单独测试；两种模式均为 15 秒，尚不用于日常整理。"
+                                   TextWrapping="Wrap" Margin="0,6,0,0" FontSize="12"/>
                         <TextBox x:Name="Output" IsReadOnly="True" TextWrapping="NoWrap"
                                  VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
                                  MinHeight="180" Margin="0,10,0,0"

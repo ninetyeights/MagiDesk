@@ -27,7 +27,7 @@ internal static class ShellThumbnail
             // SIIGBF_BIGGERSIZEOK: return a thumbnail if one exists, else the icon
             // (no THUMBNAILONLY, so non-thumbnailable items still get an image).
             if (factory.GetImage(sz, 0x1, out hbm) != 0 || hbm == IntPtr.Zero) return null;
-            return FromHBitmap(hbm);
+            return FromHBitmap(hbm, DesktopItems.IsShellPath(path));
         }
         catch { return null; }
         finally
@@ -37,12 +37,12 @@ internal static class ShellThumbnail
         }
     }
 
-    /// <summary>GetImage hands back a 32bpp premultiplied-BGRA DIB section; copy
-    /// its bits into a Pbgra32 BitmapSource so alpha is preserved
+    /// <summary>Copy the 32bpp DIB, retaining premultiplied alpha unless the
+    /// pixel data disproves it. Shell providers can return straight-alpha pixels.
     /// (CreateBitmapSourceFromHBitmap would blacken transparent edges). The DIB
     /// can be bottom-up (positive biHeight) — flip its rows so it's not upside
     /// down.</summary>
-    private static ImageSource? FromHBitmap(IntPtr hbm)
+    private static ImageSource? FromHBitmap(IntPtr hbm, bool diagnoseAlpha)
     {
         var ds = new DIBSECTION();
         if (GetObject(hbm, Marshal.SizeOf<DIBSECTION>(), ref ds) == 0) return null;
@@ -62,9 +62,41 @@ internal static class ShellThumbnail
         }
         else buffer = raw;            // already top-down
 
-        var src = BitmapSource.Create(w, h, 96, 96, PixelFormats.Pbgra32, null, buffer, stride);
+        var alpha = InspectAlpha(buffer);
+        var format = SelectPixelFormat(alpha);
+        if (diagnoseAlpha)
+        {
+            MagiDesk.Infrastructure.DiagnosticLog.Write(
+                $"DESKTOP-ALPHA size={w}x{h} transparent={alpha.Transparent} opaque={alpha.Opaque} "
+                + $"partial={alpha.Partial} rgbAboveAlpha={alpha.RgbAboveAlpha} transparentRgb={alpha.TransparentRgb} format={format}\n");
+        }
+
+        var src = BitmapSource.Create(w, h, 96, 96, format, null, buffer, stride);
         src.Freeze();
         return src;
+    }
+
+    internal readonly record struct AlphaStats(int Transparent, int Opaque, int Partial, int RgbAboveAlpha, int TransparentRgb);
+
+    // Straight alpha must be premultiplied by WPF, not interpreted as already
+    // premultiplied (which produces bright cutout-like fringes). When the bytes
+    // are ambiguous, preserve the existing premultiplied interpretation.
+    internal static PixelFormat SelectPixelFormat(AlphaStats stats)
+        => stats.RgbAboveAlpha > 0 || stats.TransparentRgb > 0 ? PixelFormats.Bgra32 : PixelFormats.Pbgra32;
+
+    internal static AlphaStats InspectAlpha(ReadOnlySpan<byte> bgra)
+    {
+        int transparent = 0, opaque = 0, partial = 0, above = 0, dirty = 0;
+        for (int i = 0; i + 3 < bgra.Length; i += 4)
+        {
+            int a = bgra[i + 3], max = Math.Max(bgra[i], Math.Max(bgra[i + 1], bgra[i + 2]));
+            if (a == 0) { transparent++; if (max > 0) dirty++; }
+            else if (a == 255) opaque++;
+            else { partial++; if (max > a) above++; }
+        }
+        // RGB > alpha disproves valid premultiplication; its absence does not
+        // prove the format. Keep diagnostics separate from pixel conversion.
+        return new(transparent, opaque, partial, above, dirty);
     }
 
     [DllImport("shell32.dll", CharSet = CharSet.Unicode, PreserveSig = false)]

@@ -57,7 +57,7 @@
                         </Grid.ColumnDefinitions>
                         <StackPanel Grid.Column="0" VerticalAlignment="Center">
                             <TextBlock Text="停靠模式" FontWeight="SemiBold"/>
-                            <TextBlock Text="悬浮：自由拖到桌面任意位置，悬浮在最上层。任务栏：像系统任务栏一样固定在屏幕顶部并预留空间，最大化的窗口不会被遮挡（按钮居中）。"
+                            <TextBlock Text="悬浮：自由拖到桌面任意位置，悬浮在最上层。任务栏：像系统任务栏一样固定在屏幕顶部并预留空间，最大化的窗口不会被遮挡。"
                                        FontSize="12"
                                        Foreground="{DynamicResource TextFillColorSecondaryBrush}"
                                        TextWrapping="Wrap"
@@ -69,6 +69,51 @@
                                   SelectionChanged="DockMode_Changed">
                             <ComboBoxItem Content="悬浮"/>
                             <ComboBoxItem Content="任务栏（顶部固定）"/>
+                        </ComboBox>
+                    </Grid>
+                </ui:Card>
+
+                <ui:Card HorizontalAlignment="Stretch" Padding="18,16" Margin="0,0,0,12">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="200"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel VerticalAlignment="Center">
+                            <TextBlock Text="任务栏按钮位置" FontWeight="SemiBold"/>
+                            <TextBlock Text="仅用于任务栏模式，默认居中。" FontSize="12"
+                                       Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="0,2,8,0"/>
+                        </StackPanel>
+                        <ComboBox Grid.Column="1" x:Name="CmbDockAlignment"
+                                  VerticalAlignment="Center" SelectionChanged="DockAlignment_Changed">
+                            <ComboBoxItem Content="居中"/>
+                            <ComboBoxItem Content="靠左"/>
+                        </ComboBox>
+                    </Grid>
+                </ui:Card>
+
+                <!-- Chrome colour scheme: follow Windows, or force light/dark -->
+                <ui:Card HorizontalAlignment="Stretch" Padding="18,16" Margin="0,0,0,12">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="200"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                            <TextBlock Text="外观主题" FontWeight="SemiBold"/>
+                            <TextBlock Text="dock 采用 Windows 11 任务栏样式（悬停高亮、运行/当前窗口指示条）。「跟随系统」会在你切换 Windows 浅色/深色时实时跟着变。"
+                                       FontSize="12"
+                                       Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                       TextWrapping="Wrap"
+                                       Margin="0,2,8,0"/>
+                        </StackPanel>
+                        <ComboBox Grid.Column="1" x:Name="CmbDockTheme"
+                                  VerticalAlignment="Center"
+                                  VerticalContentAlignment="Center"
+                                  SelectionChanged="DockTheme_Changed">
+                            <ComboBoxItem Content="跟随系统"/>
+                            <ComboBoxItem Content="浅色"/>
+                            <ComboBoxItem Content="深色"/>
                         </ComboBox>
                     </Grid>
                 </ui:Card>

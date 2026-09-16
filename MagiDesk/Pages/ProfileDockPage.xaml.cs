@@ -39,6 +39,9 @@ public partial class ProfileDockPage : Page
         var cfg = AppConfig.Current;
         TsDock.IsChecked           = cfg.BrowserDockEnabled;
         CmbDockMode.SelectedIndex  = (int)cfg.BrowserDockMode;
+        CmbDockTheme.SelectedIndex = (int)cfg.BrowserDockTheme;
+        CmbDockAlignment.SelectedIndex = cfg.BrowserDockAlignLeft ? 1 : 0;
+        CmbDockAlignment.IsEnabled = cfg.BrowserDockMode == DockMode.AppBar;
         CmbMonitorMode.SelectedIndex = (int)cfg.BrowserDockMonitorMode;
         PopulateMonitors(cfg);
         UpdateMonitorPickerEnabled();
@@ -64,6 +67,20 @@ public partial class ProfileDockPage : Page
     {
         if (_loading) return;
         AppConfig.Current.BrowserDockMode = (DockMode)System.Math.Max(0, CmbDockMode.SelectedIndex);
+        AppConfig.Current.Save();
+    }
+
+    private void DockAlignment_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_loading) return;
+        AppConfig.Current.BrowserDockAlignLeft = CmbDockAlignment.SelectedIndex == 1;
+        AppConfig.Current.Save();
+    }
+
+    private void DockTheme_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_loading) return;
+        AppConfig.Current.BrowserDockTheme = (DockTheme)System.Math.Max(0, CmbDockTheme.SelectedIndex);
         AppConfig.Current.Save();
     }
 

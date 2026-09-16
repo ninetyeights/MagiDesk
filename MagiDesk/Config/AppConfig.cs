@@ -114,6 +114,11 @@ public sealed class AppConfig
     /// strip pinned to the top edge that reserves screen space). See
     /// <see cref="DockMode"/>.</summary>
     public DockMode BrowserDockMode     { get; set; } = DockMode.Floating;
+    /// <summary>Dock chrome colour scheme: follow Windows (live), or force
+    /// light / dark. See <see cref="DockTheme"/>.</summary>
+    public DockTheme BrowserDockTheme   { get; set; } = DockTheme.System;
+    public bool BrowserDockAlignLeft { get; set; } = false;
+    public Dictionary<string, string> BrowserLaunchArguments { get; set; } = new();
     /// <summary>Size (DIPs) of each avatar button in the dock.</summary>
     public int    BrowserDockButtonSize { get; set; } = 36;
     /// <summary>Dock window position in DIPs. -1 = not yet positioned; the
@@ -121,6 +126,8 @@ public sealed class AppConfig
     /// legacy single-monitor / "primary (auto)" path — explicit monitor
     /// targets persist per-monitor device-pixel positions in
     /// <see cref="BrowserDockMonitorPositions"/> instead.</summary>
+    /// <summary>Free-floating position in physical pixels; null means never saved.</summary>
+    public DockPoint? BrowserDockPositionPx { get; set; }
     public double BrowserDockX { get; set; } = -1;
     public double BrowserDockY { get; set; } = -1;
     /// <summary>Show the dock on a single monitor or on every monitor.</summary>
@@ -156,9 +163,11 @@ public sealed class AppConfig
     public bool BrowserDockLocked { get; set; } = false;
 
     // ---- Desktop fences (custom-rendered desktop icon boxes) -------------
-    /// <summary>When on, hide the system desktop icons and show custom fence
-    /// boxes instead. Off by default — enabling hides the real icons.</summary>
+    /// <summary>Show desktop boxes without changing system desktop icons.</summary>
     public bool DesktopFencesEnabled { get; set; } = false;
+    public bool DesktopUnifiedSurface { get; set; } = false;
+    public uint DesktopFencesHotkeyMods { get; set; } = 2 | 4;
+    public uint DesktopFencesHotkeyVk { get; set; } = 0x46; // Ctrl+Shift+F; zero disables.
     /// <summary>User's fence boxes. One is flagged unsorted (the catch-all).
     /// The service seeds the unsorted box on first enable.</summary>
     public List<DesktopBox> DesktopBoxes { get; set; } = new();
@@ -194,12 +203,11 @@ public sealed class AppConfig
     public int  EdgeSnapBand           { get; set; } = 12;
     /// <summary>Snap to each monitor's work-area edges (excludes taskbar / AppBars).</summary>
     public bool EdgeSnapToMonitorEdges { get; set; } = true;
-    /// <summary>Snap the dragged window's edges flush against other windows'
-    /// opposite edges (right-to-left / bottom-to-top), so windows abut.</summary>
+    /// <summary>Snap to nearby window edges: both opposite-edge contact and matching-edge alignment.</summary>
     public bool EdgeSnapToWindowEdges  { get; set; } = true;
-    /// <summary>Snap so the dragged window's edges / center line up with other
-    /// windows' matching edges / centers (alignment without abutting).</summary>
-    public bool EdgeSnapToWindowAlign  { get; set; } = true;
+    /// <summary>Align centers of nearby windows. Separate opt-in; the old combined
+    /// EdgeSnapToWindowAlign JSON field is intentionally not migrated into this flag.</summary>
+    public bool EdgeSnapToWindowCenters { get; set; } = false;
 
     // ------------------------------------------------------------ singleton
 

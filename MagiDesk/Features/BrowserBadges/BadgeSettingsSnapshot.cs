@@ -19,7 +19,7 @@ internal static class BadgeSettingsSnapshot
         c.BrowserDockEnabled, c.BrowserDockMode, c.BrowserDockMonitorMode,
         c.BrowserDockMonitorId, c.BrowserDockButtonSize, c.BrowserDockGroups,
         c.BrowserDockSeparator, c.BrowserDockHideUngrouped,
-        c.BrowserDockUngroupedOrder, c.BrowserDockLocked,
+        c.BrowserDockUngroupedOrder, c.BrowserDockLocked, c.BrowserDockTheme, c.BrowserDockAlignLeft,
         Profiles = c.BrowserProfiles.OrderBy(p => p.Key, StringComparer.Ordinal).ToArray(),
     });
 }

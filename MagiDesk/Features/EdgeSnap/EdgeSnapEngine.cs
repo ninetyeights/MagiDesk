@@ -29,6 +29,8 @@ internal sealed class EdgeSnapEngine : IDisposable
     private readonly List<RECT> _monitorWork = new();
     private readonly List<RECT> _windows = new();
     private IntPtr _dragged;
+    private long _snapshotVersion;
+    private bool _snapshotReady;
     // Invisible DWM resize-border insets of the dragged window (GetWindowRect
     // minus the visible frame). Captured once per drag; constant while moving.
     // We snap the VISIBLE edges, so we shift GetWindowRect edges in by these.
@@ -44,6 +46,8 @@ internal sealed class EdgeSnapEngine : IDisposable
     {
         _attached = altDragger;
         altDragger.MoveDragStarted += OnMoveDragStarted;
+        altDragger.MoveDragEnded += OnMoveDragEnded;
+        AppConfig.Changed += OnConfigChanged;
         altDragger.MoveSnap = Adjust;
     }
 
@@ -52,6 +56,9 @@ internal sealed class EdgeSnapEngine : IDisposable
         if (_attached is not null)
         {
             _attached.MoveDragStarted -= OnMoveDragStarted;
+            _attached.MoveDragEnded -= OnMoveDragEnded;
+            AppConfig.Changed -= OnConfigChanged;
+            OnMoveDragEnded();
             if (_attached.MoveSnap == Adjust) _attached.MoveSnap = null;
             _attached = null;
         }
@@ -64,8 +71,34 @@ internal sealed class EdgeSnapEngine : IDisposable
     // dispatcher; the first frame or two before it lands just don't snap.
     private void OnMoveDragStarted(IntPtr hwnd)
     {
+        OnMoveDragEnded(); // No previous window's targets/insets in the first frames.
         _dragged = hwnd;
-        _ui.BeginInvoke(new Action(Snapshot));
+        QueueSnapshot();
+    }
+
+    private void OnMoveDragEnded()
+    {
+        _dragged = IntPtr.Zero;
+        _snapshotVersion++;
+        _snapshotReady = false;
+        _monitorWork.Clear();
+        _windows.Clear();
+        _insetL = _insetT = _insetR = _insetB = 0;
+    }
+
+    private void OnConfigChanged()
+    {
+        if (_dragged != IntPtr.Zero && AppConfig.Current.EdgeSnapEnabled && !_snapshotReady)
+            QueueSnapshot();
+    }
+
+    private void QueueSnapshot()
+    {
+        long version = ++_snapshotVersion;
+        _ui.BeginInvoke(new Action(() =>
+        {
+            if (version == _snapshotVersion && _dragged != IntPtr.Zero) Snapshot();
+        }));
     }
 
     // ================================================= snapshot + snap math
@@ -77,7 +110,7 @@ internal sealed class EdgeSnapEngine : IDisposable
         _insetL = _insetT = _insetR = _insetB = 0;
 
         var cfg = AppConfig.Current;
-        if (!cfg.EdgeSnapEnabled) return;
+        if (!cfg.EdgeSnapEnabled || !IsWindow(_dragged)) return;
 
         // Capture the dragged window's invisible-border insets so we can snap
         // its VISIBLE edges (otherwise every snap lands ~7 px off).
@@ -90,11 +123,11 @@ internal sealed class EdgeSnapEngine : IDisposable
             _insetB = dwr.Bottom - dfr.Bottom;
         }
 
-        if (cfg.EdgeSnapToMonitorEdges)
-            foreach (var m in MonitorEnumerator.All())
-                _monitorWork.Add(m.WorkArea);
+        // Capture all target types once so switches take effect immediately,
+        // without enumerating from the mouse hook when a target is enabled.
+        foreach (var m in MonitorEnumerator.All())
+            _monitorWork.Add(m.WorkArea);
 
-        if (cfg.EdgeSnapToWindowEdges || cfg.EdgeSnapToWindowAlign)
         {
             EnumWindows((h, _) =>
             {
@@ -106,6 +139,7 @@ internal sealed class EdgeSnapEngine : IDisposable
                 return true;
             }, IntPtr.Zero);
         }
+        _snapshotReady = true;
     }
 
     /// <summary>Adjust a proposed (moving) window rect so a VISIBLE edge within
@@ -124,15 +158,23 @@ internal sealed class EdgeSnapEngine : IDisposable
         // Shift belongs to Zones — back off (unless Shift IS the move modifier,
         // a degenerate config that already collides with Zones).
         if ((cfg.MoveModMask & 4) == 0 && (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0) return p;
-        int band = Math.Max(0, cfg.EdgeSnapBand);
+        return Calculate(p, cfg, _monitorWork, _windows, _insetL, _insetT, _insetR, _insetB);
+    }
+
+    // Pure calculation shared by live dragging and deterministic, no-window tests.
+    internal static RECT Calculate(RECT p, AppConfig cfg, IReadOnlyList<RECT> monitorWork,
+        IReadOnlyList<RECT> windows, int insetL = 0, int insetT = 0, int insetR = 0, int insetB = 0)
+    {
+        if (!cfg.EdgeSnapEnabled) return p;
+        int band = Math.Clamp(cfg.EdgeSnapBand, 0, 40);
         if (band == 0) return p;
 
         int w = p.Right - p.Left, h = p.Bottom - p.Top;
 
         // Snap the VISIBLE edges (GetWindowRect shifted in by the invisible
         // border). A delta here is a pure translation, applied 1:1 to position.
-        int vl = p.Left + _insetL, vr = p.Right - _insetR;
-        int vt = p.Top  + _insetT, vb = p.Bottom - _insetB;
+        int vl = p.Left + insetL, vr = p.Right - insetR;
+        int vt = p.Top  + insetT, vb = p.Bottom - insetB;
         int cx = (vl + vr) / 2, cy = (vt + vb) / 2;
 
         int bestXDelta = 0, bestXDist = band + 1;
@@ -150,31 +192,44 @@ internal sealed class EdgeSnapEngine : IDisposable
         }
 
         // Monitor work area: keep the window inside — left↔left, right↔right.
-        foreach (var m in _monitorWork)
+        if (cfg.EdgeSnapToMonitorEdges)
         {
-            TryX(vl, m.Left);   TryX(vr, m.Right);
-            TryY(vt, m.Top);    TryY(vb, m.Bottom);
+            foreach (var m in monitorWork)
+            {
+                // Edges are finite segments, not lines extending across other screens.
+                if (Near(vt, vb, m.Top, m.Bottom, band))
+                { TryX(vl, m.Left); TryX(vr, m.Right); }
+                if (Near(vl, vr, m.Left, m.Right, band))
+                { TryY(vt, m.Top); TryY(vb, m.Bottom); }
+            }
         }
 
-        bool abut  = cfg.EdgeSnapToWindowEdges;
-        bool align = cfg.EdgeSnapToWindowAlign;
-        if (abut || align)
+        bool edges   = cfg.EdgeSnapToWindowEdges;    // opposite-edge contact + matching-edge alignment
+        bool centers = cfg.EdgeSnapToWindowCenters;  // center-line alignment (separate opt-in)
+        if (edges || centers)
         {
-            foreach (var r in _windows)
+            foreach (var r in windows)
             {
-                if (abut)
+                bool nearY = Near(vt, vb, r.Top, r.Bottom, band);
+                bool nearX = Near(vl, vr, r.Left, r.Right, band);
+                if (edges)
                 {
-                    // Flush against the opposite edge (windows sit side by side).
-                    TryX(vr, r.Left);  TryX(vl, r.Right);
-                    TryY(vb, r.Top);   TryY(vt, r.Bottom);
+                    // Only for overlapping / nearby windows on the perpendicular axis.
+                    if (nearY)
+                    {
+                        TryX(vr, r.Left); TryX(vl, r.Right);   // flush, side by side
+                        TryX(vl, r.Left); TryX(vr, r.Right);   // matching left/right edges
+                    }
+                    if (nearX)
+                    {
+                        TryY(vb, r.Top); TryY(vt, r.Bottom);   // flush, stacked
+                        TryY(vt, r.Top); TryY(vb, r.Bottom);   // matching top/bottom edges
+                    }
                 }
-                if (align)
+                if (centers)
                 {
-                    // Line up matching edges + centers (no abutting required).
-                    TryX(vl, r.Left);   TryX(vr, r.Right);
-                    TryY(vt, r.Top);    TryY(vb, r.Bottom);
-                    TryX(cx, r.Left + (r.Right - r.Left) / 2);
-                    TryY(cy, r.Top  + (r.Bottom - r.Top) / 2);
+                    if (nearY) TryX(cx, r.Left + (r.Right - r.Left) / 2);
+                    if (nearX) TryY(cy, r.Top + (r.Bottom - r.Top) / 2);
                 }
             }
         }
@@ -183,6 +238,9 @@ internal sealed class EdgeSnapEngine : IDisposable
         int ny = p.Top  + (bestYDist <= band ? bestYDelta : 0);
         return new RECT { Left = nx, Top = ny, Right = nx + w, Bottom = ny + h };
     }
+
+    private static bool Near(int start, int end, int targetStart, int targetEnd, int band)
+        => (long)start <= (long)targetEnd + band && (long)targetStart <= (long)end + band;
 
     /// <summary>True if every modifier bit in <paramref name="mask"/> (Alt=1,
     /// Ctrl=2, Shift=4, Win=8 — same layout as AltDragger's MoveModMask) is

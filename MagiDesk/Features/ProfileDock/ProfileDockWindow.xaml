@@ -10,13 +10,62 @@
         Topmost="True"
         Focusable="False"
         ResizeMode="NoResize"
+        UseLayoutRounding="True"
+        SnapsToDevicePixels="True"
         SizeToContent="WidthAndHeight">
+    <Window.Resources>
+        <!-- Placeholder values; ApplyTheme() swaps these at runtime from
+             DockPalette, and everything below binds with DynamicResource so a
+             Windows theme switch restyles the dock without rebuilding it. -->
+        <SolidColorBrush x:Key="DockBackgroundBrush"  Color="#E8202020"/>
+        <SolidColorBrush x:Key="DockBorderBrush"      Color="#26FFFFFF"/>
+        <SolidColorBrush x:Key="DockHoverBrush"       Color="#1AFFFFFF"/>
+        <SolidColorBrush x:Key="DockPressedBrush"     Color="#0DFFFFFF"/>
+        <SolidColorBrush x:Key="DockTextBrush"        Color="#FFFFFFFF"/>
+        <SolidColorBrush x:Key="DockSeparatorBrush"   Color="#2EFFFFFF"/>
+        <SolidColorBrush x:Key="DockGroupBgBrush"     Color="#14FFFFFF"/>
+        <SolidColorBrush x:Key="DockGroupBorderBrush" Color="#22FFFFFF"/>
+
+        <!-- Taskbar button: no chrome of its own, just a rounded-square wash
+             on hover / press, exactly like a Windows 11 taskbar icon. -->
+        <Style x:Key="DockButtonStyle" TargetType="Button">
+            <Setter Property="Background"        Value="Transparent"/>
+            <Setter Property="BorderThickness"   Value="0"/>
+            <Setter Property="Padding"           Value="0"/>
+            <Setter Property="Focusable"         Value="False"/>
+            <Setter Property="SnapsToDevicePixels" Value="True"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bg"
+                                Background="{TemplateBinding Background}"
+                                CornerRadius="5"
+                                SnapsToDevicePixels="True">
+                            <ContentPresenter HorizontalAlignment="Center"
+                                              VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bg" Property="Background"
+                                        Value="{DynamicResource DockHoverBrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Bg" Property="Background"
+                                        Value="{DynamicResource DockPressedBrush}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+
     <Border x:Name="DockRoot"
-            CornerRadius="6"
+            CornerRadius="8"
             BorderThickness="1"
-            BorderBrush="#40FFFFFF"
-            Background="#D0202020"
-            Padding="6"
+            BorderBrush="{DynamicResource DockBorderBrush}"
+            Background="{DynamicResource DockBackgroundBrush}"
+            Padding="8,4"
             MouseLeftButtonDown="Dock_MouseDown"
             MouseMove="Dock_MouseMove"
             MouseLeftButtonUp="Dock_MouseUp">

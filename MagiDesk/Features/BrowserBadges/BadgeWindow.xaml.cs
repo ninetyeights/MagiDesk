@@ -198,12 +198,7 @@ public partial class BadgeWindow : Window
         {
             try
             {
-                var bmp = new BitmapImage();
-                bmp.BeginInit();
-                bmp.CacheOption = BitmapCacheOption.OnLoad;
-                bmp.UriSource = new Uri(src);
-                bmp.EndInit();
-                bmp.Freeze();
+                var bmp = AvatarImageLoader.Load(src, avatar, VisualTreeHelper.GetDpi(this).DpiScaleX);
                 AvatarHost.Background = new ImageBrush(bmp) { Stretch = Stretch.UniformToFill };
                 AvatarInitial.Text = string.Empty;
                 return;

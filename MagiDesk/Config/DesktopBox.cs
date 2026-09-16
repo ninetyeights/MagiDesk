@@ -45,6 +45,10 @@ public sealed class DesktopBox
     public string? BgColorHex { get; set; }
     /// <summary>Background transparency, 0 (opaque) .. 90 (very see-through).</summary>
     public int  Transparency { get; set; } = 60;
+    /// <summary>System background blur: 0 = off, positive = on (including legacy value 2).</summary>
+    public int BackgroundBlur { get; set; }
+    public bool ShowBorder { get; set; } = false;
+    public bool RoundedCorners { get; set; }
     /// <summary>Show item names under/next to the icon. False = icon-only.</summary>
     public bool ShowLabels   { get; set; } = true;
     /// <summary>Tile arrangement.</summary>
@@ -62,4 +66,10 @@ public sealed class DesktopBox
     /// <summary>Item file paths placed in this box (ignored for the unsorted and
     /// folder-mapped boxes).</summary>
     public List<string> Members { get; set; } = new();
+
+    // Read-only compatibility input, cleared after converting old tabs to boxes.
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public List<DesktopTab>? Tabs { get; set; }
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? ActiveTabId { get; set; }
 }

@@ -43,7 +43,7 @@ public sealed class BrowserBadgeService : IDisposable
     // every EVENT_OBJECT_SHOW from the system thread. A browser's PIDs live for
     // the session, so a negative answer (null = not a supported browser) is
     // final until the PID is reused — rare enough we don't invalidate.
-    private readonly Dictionary<int, BrowserInfo?> _browserByPid = new();
+    private readonly ProcessLookupCache<BrowserInfo?> _browserByPid = new(IdentifyBrowser);
     private List<ChromeProfile> _profiles = new();
     private IntPtr _locationHook;
     private IntPtr _lifecycleHook;
@@ -149,25 +149,60 @@ public sealed class BrowserBadgeService : IDisposable
 
         if (evt == EVENT_OBJECT_SHOW)
         {
-            // Coarse PID filter on the hook thread — avoids per-event marshal
-            // for non-browser windows (menus, tooltips, etc.).
+            // This is an OUTOFCONTEXT WinEvent callback: it must return almost
+            // immediately. It fires for EVERY window that appears anywhere on the
+            // system, so anything slow here stalls the whole event pipeline and
+            // makes other apps' transient popups (menus, combo dropdowns) flicker
+            // shut. Hence: cheap style checks only, and a cache-only PID lookup —
+            // resolving a novel PID opens the process and reads its main module,
+            // which costs milliseconds (far more for protected processes).
+            if (!IsTopLevelAppWindow(hwnd)) return;
             GetWindowThreadProcessId(hwnd, out uint pid);
             if (pid == 0) return;
-            var browser = GetBrowserForPid((int)pid);
-            if (browser is null) return;
-            if (_byHwnd.ContainsKey(hwnd)) return;
-            _ui.BeginInvoke(new Action(() =>
-            {
-                _ = TryAddBadgeForHwnd(hwnd, (int)pid, browser);
-            }));
+
+            _ = IdentifyAndAddAsync(hwnd, (int)pid);
         }
     }
 
-    private void OnForegroundChanged(IntPtr hook, uint evt, IntPtr hwnd,
+    internal void OnForegroundChanged(IntPtr hook, uint evt, IntPtr hwnd,
         int idObject, int idChild, uint thread, uint time)
     {
-        if (idObject != OBJID_WINDOW || hwnd == IntPtr.Zero) return;
-        _ui.BeginInvoke(new Action(() => WindowsChanged?.Invoke()));
+        if (_disposed || idObject != OBJID_WINDOW || hwnd == IntPtr.Zero) return;
+        // Owned dialogs can belong to another app. Every foreground transition
+        // must refresh the dock; only SHOW events use the badge-window filter.
+        _ui.BeginInvoke(new Action(() => { if (!_disposed) WindowsChanged?.Invoke(); }));
+    }
+
+    private async Task IdentifyAndAddAsync(IntPtr hwnd, int pid)
+    {
+        try
+        {
+            var browser = await _browserByPid.GetAsync(pid);
+            if (_disposed || browser is null) return;
+            await _ui.InvokeAsync(() =>
+            {
+                if (!_disposed && IsCurrentWindow(hwnd, pid))
+                    _ = TryAddBadgeForHwnd(hwnd, pid, browser);
+            });
+        }
+        catch (Exception ex) { Log($"Browser identification failed: {ex.GetType().Name}"); }
+    }
+
+    private const int WS_EX_NOACTIVATE_ = 0x08000000;
+
+    /// <summary>Cheap, hook-thread-safe "is this a real top-level app window?".
+    /// EVENT_OBJECT_SHOW / EVENT_SYSTEM_FOREGROUND fire constantly for menus,
+    /// tooltips and &lt;select&gt; dropdowns; those are owned and/or
+    /// no-activate/tool windows, so this rejects them with three cheap calls and
+    /// no process inspection.</summary>
+    private static bool IsTopLevelAppWindow(IntPtr hwnd)
+    {
+        if (hwnd == IntPtr.Zero) return false;
+        if (GetWindow(hwnd, GW_OWNER) != IntPtr.Zero) return false;
+        int ex = GetWindowLong(hwnd, GWL_EXSTYLE);
+        if ((ex & WS_EX_TOOLWINDOW) != 0) return false;
+        if ((ex & WS_EX_NOACTIVATE_) != 0) return false;
+        return true;
     }
 
     /// <summary>Cached PID → browser lookup. Process enumeration is the
@@ -175,9 +210,8 @@ public sealed class BrowserBadgeService : IDisposable
     /// executable lives under a recognized install directory for one of the
     /// supported browsers — any browser exe from a portable copy, repackaged
     /// app, or the Edge WebView2 runtime is rejected.</summary>
-    private BrowserInfo? GetBrowserForPid(int pid)
+    private static BrowserInfo? IdentifyBrowser(int pid)
     {
-        if (_browserByPid.TryGetValue(pid, out var known)) return known;
         BrowserInfo? browser = null;
         try
         {
@@ -187,7 +221,6 @@ public sealed class BrowserBadgeService : IDisposable
             browser = BrowserInfo.MatchExe(exe);
         }
         catch { }
-        _browserByPid[pid] = browser;
         return browser;
     }
 

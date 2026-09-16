@@ -52,3 +52,12 @@ public enum DockGroupSeparator
     /// <summary>Each group wrapped in a semi-transparent rounded panel.</summary>
     Bordered = 3,
 }
+
+/// <summary>Which colour scheme the dock chrome paints itself in.</summary>
+public enum DockTheme
+{
+    /// <summary>Follow the Windows light/dark setting, live.</summary>
+    System = 0,
+    Light  = 1,
+    Dark   = 2,
+}

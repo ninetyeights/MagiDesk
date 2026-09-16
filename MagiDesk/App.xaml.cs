@@ -66,6 +66,30 @@ namespace MagiDesk
 
         protected override void OnStartup(StartupEventArgs e)
         {
+            if (e.Args.Length == 3 && e.Args[0] == DesktopSurfaceLease.Argument)
+            {
+                ShutdownMode = ShutdownMode.OnExplicitShutdown;
+                Shutdown(DesktopSurfaceLease.RunGuard(e.Args[1], e.Args[2]));
+                return;
+            }
+            if (e.Args.Length >= 1 && e.Args[0] == Native.DesktopDrawProbe.Argument)
+            {
+                ShutdownMode = ShutdownMode.OnExplicitShutdown;
+                var ownerArgument = e.Args.FirstOrDefault(a => a.StartsWith("--owner-pid=", StringComparison.Ordinal));
+                uint.TryParse(ownerArgument?["--owner-pid=".Length..], out uint ownerPid);
+                var target = e.Args.Length >= 2 && !e.Args[1].StartsWith("--", StringComparison.Ordinal) ? e.Args[1] : null;
+                Shutdown(Native.DesktopDrawProbe.Run(target, e.Args.Contains("--interaction"), ownerPid));
+                return;
+            }
+            if (e.Args.Length == 2 && e.Args[0] == Native.DesktopIconVisibilityProbe.Argument)
+            {
+                // StartupUri rejects null. Shutdown below prevents startup navigation,
+                // just as in the existing second-instance exit path.
+                ShutdownMode = ShutdownMode.OnExplicitShutdown;
+                int result = Native.DesktopIconVisibilityProbe.Run(e.Args[1]);
+                Shutdown(result);
+                return;
+            }
             // Single-instance gate. If we're the second copy, signal the
             // owner to surface its window and exit immediately (before WPF
             // starts up the main window of this instance).
@@ -77,6 +101,7 @@ namespace MagiDesk
                 Shutdown();
                 return;
             }
+            Native.DesktopIconVisibilityProbe.RecoverPending();
             // Listen for the show-signal on a background wait; dispatches back
             // to the UI thread to raise the main window.
             ThreadPool.RegisterWaitForSingleObject(_showEvent, (_, _) =>
