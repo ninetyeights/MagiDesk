@@ -62,10 +62,20 @@ public sealed class DesktopBox
     /// instead of holding assigned desktop items. Double-clicking a subfolder
     /// navigates into it. Null = a normal item box.</summary>
     public string? FolderPath { get; set; }
+    public string? FolderIdentity { get; set; }
+    // Pages remain independent content records; one window displays the selected member of a group.
+    public string? TabGroupId { get; set; }
+    public string? SelectedPageId { get; set; }
+    // A category is a view over its group's shared source, never a disk folder.
+    public string? ClassificationOriginalName { get; set; }
+    public bool IsRuleCategory { get; set; }
+    public BoxClassificationRule? CategoryRule { get; set; }
 
     /// <summary>Item file paths placed in this box (ignored for the unsorted and
     /// folder-mapped boxes).</summary>
     public List<string> Members { get; set; } = new();
+
+    public List<DesktopMemberReference> MemberReferences { get; set; } = new();
 
     // Read-only compatibility input, cleared after converting old tabs to boxes.
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]

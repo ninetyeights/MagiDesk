@@ -13,21 +13,27 @@ namespace MagiDesk.Features.DesktopFences;
 /// </summary>
 internal static class ShellThumbnail
 {
-    public static ImageSource? Get(string path, int size)
+    public static ImageSource? Get(string path, int size, bool iconOnly = false)
     {
+        using var trace = MagiDesk.Infrastructure.StartupTrace.Measure("shell.image", $"item={MagiDesk.Infrastructure.StartupTrace.Key(path)} iconOnly={iconOnly} pixels={size}");
         IShellItemImageFactory? factory = null;
         IntPtr hbm = IntPtr.Zero;
         try
         {
             var iid = typeof(IShellItemImageFactory).GUID;
-            SHCreateItemFromParsingName(path, IntPtr.Zero, ref iid, out factory);
+            using (MagiDesk.Infrastructure.StartupTrace.Measure("shell.image-create"))
+                SHCreateItemFromParsingName(path, IntPtr.Zero, ref iid, out factory);
             if (factory is null) return null;
 
             var sz = new SIZE { cx = size, cy = size };
             // SIIGBF_BIGGERSIZEOK: return a thumbnail if one exists, else the icon
             // (no THUMBNAILONLY, so non-thumbnailable items still get an image).
-            if (factory.GetImage(sz, 0x1, out hbm) != 0 || hbm == IntPtr.Zero) return null;
-            return FromHBitmap(hbm, DesktopItems.IsShellPath(path));
+            int result;
+            using (MagiDesk.Infrastructure.StartupTrace.Measure("shell.image-get"))
+                result = factory.GetImage(sz, iconOnly ? 0x5 : 0x1, out hbm);
+            if (result != 0 || hbm == IntPtr.Zero) return null;
+            using (MagiDesk.Infrastructure.StartupTrace.Measure("shell.image-convert"))
+                return FromHBitmap(hbm, DesktopItems.IsShellPath(path));
         }
         catch { return null; }
         finally

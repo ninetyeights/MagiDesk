@@ -1,3 +1,4 @@
+using MagiDesk.Infrastructure;
 using System.Windows;
 using System.Windows.Interop;
 using System.Windows.Threading;
@@ -114,6 +115,7 @@ public sealed class ProfileDockService : IDisposable
 
     public void RefreshCatalog()
     {
+        using var trace = StartupTrace.Measure("dock.catalog");
         _profiles = ChromeProfileCatalog.LoadAll();
     }
 
@@ -123,31 +125,31 @@ public sealed class ProfileDockService : IDisposable
         var cfg = AppConfig.Current;
         _signature = Signature(cfg);
 
-        var monitors = TargetMonitors(cfg);
+        var monitors = StartupTrace.Run("dock.monitors", () => TargetMonitors(cfg));
         // Legacy free-drag behavior only when a single dock targets the primary
         // monitor implicitly (no explicit monitor chosen). Any explicit monitor
         // choice or the all-monitors mode uses per-monitor device-pixel placement.
         bool legacy = cfg.BrowserDockMonitorMode == DockMonitorMode.Single
                       && string.IsNullOrEmpty(cfg.BrowserDockMonitorId);
 
-        var groups = BuildGroupedProfiles();
+        var groups = StartupTrace.Run("dock.groups", BuildGroupedProfiles);
         foreach (var m in monitors)
         {
-            var w = new ProfileDockWindow
+            var w = StartupTrace.Run("dock.window-create", () => new ProfileDockWindow
             {
                 Mode               = cfg.BrowserDockMode,
                 MonitorId          = m.Id,
                 MonitorWorkAreaPx  = m.WorkArea,
                 PerMonitorPosition = !legacy,
-            };
+            });
             w.SavedPositionPx = DockPositionMemory.Read(cfg, !legacy, m.Id, m.DpiPercent / 100.0);
             w.ProfileClicked += OnProfileClicked;
-            w.SetProfiles(groups, cfg.BrowserDockButtonSize, cfg.BrowserDockSeparator);
-            w.Show();
-            w.RestoreFloatingPosition();
+            using (StartupTrace.Measure("dock.profiles")) w.SetProfiles(groups, cfg.BrowserDockButtonSize, cfg.BrowserDockSeparator);
+            using (StartupTrace.Measure("dock.show")) w.Show();
+            using (StartupTrace.Measure("dock.restore-position")) w.RestoreFloatingPosition();
             _windows.Add(w);
         }
-        OnWindowsChanged(); // initial state
+        using (StartupTrace.Measure("dock.initial-state")) OnWindowsChanged();
     }
 
     /// <summary>The monitors the dock should appear on: every monitor in
@@ -247,9 +249,9 @@ public sealed class ProfileDockService : IDisposable
         if (_windows.Count == 0) return;
         RefreshCatalog();
         var cfg = AppConfig.Current;
-        var groups = BuildGroupedProfiles();
+        var groups = StartupTrace.Run("dock.groups", BuildGroupedProfiles);
         foreach (var w in _windows)
-            w.SetProfiles(groups, cfg.BrowserDockButtonSize, cfg.BrowserDockSeparator);
+            using (StartupTrace.Measure("dock.profiles")) w.SetProfiles(groups, cfg.BrowserDockButtonSize, cfg.BrowserDockSeparator);
         OnWindowsChanged();
     }
 

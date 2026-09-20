@@ -60,7 +60,7 @@ Service 通常持有 UI 线程的 `Dispatcher`。跨功能访问走 `App.<Featur
 - **COM interface 的数组参数默认按 SAFEARRAY 编组** —— 会内存损坏/`ExecutionEngineException`。
   给 `IShellFolder.GetUIObjectOf` 等的 `apidl` 加 `[In, MarshalAs(UnmanagedType.LPArray)]`。
 - **Segoe MDL2 PUA 字形别直接打字面量** —— 用 `((char)0xE70E).ToString()` 之类从码点构造,避免被工具改坏。
-- **鼠标钩子回调在 UI 线程** —— 别在里面做重活/同步枚举窗口;快照/枚举丢到 `Dispatcher.BeginInvoke` 或后台线程。
+- **鼠标钩子回调在专用 `MouseHookThread` 线程** —— 安装、重装、卸载和拖动状态都归该线程；禁止同步等待 UI。快照在 UI 枚举后通过 `AltDragger.Post` 交回，过期结果丢弃；Zones 的界面更新仍异步派发到 UI。
 - **`UseWindowsForms=true`** 只为托盘的 `NotifyIcon`;csproj 里 `Using Remove` 掉了 `System.Drawing`/
   `System.Windows.Forms` 的隐式 using(和 WPF 的 `Brush`/`Rectangle` 冲突),托盘代码用全限定名。
 

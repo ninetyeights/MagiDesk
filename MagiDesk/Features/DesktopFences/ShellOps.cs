@@ -74,6 +74,9 @@ internal static class ShellOps
     internal static bool Transfer(IReadOnlyList<string> paths, string destination, bool move, IntPtr owner)
         => paths.Count > 0 && Run(move ? FO_MOVE : FO_COPY, paths, destination, owner);
 
+    internal static bool Recycle(IReadOnlyList<string> paths, IntPtr owner, FileOperation? operation = null)
+        => paths.Count > 0 && Run(FO_DELETE, paths, null, owner, operation);
+
     // ---------------------------------------------------------- new items
     public static string? NewFolder(string dir)
     {
@@ -120,7 +123,9 @@ internal static class ShellOps
     private const uint FO_MOVE = 1, FO_COPY = 2, FO_DELETE = 3;
     private const ushort FOF_ALLOWUNDO = 0x0040, FOF_NOCONFIRMMKDIR = 0x0200;
 
-    private static bool Run(uint func, IReadOnlyList<string> from, string? to, IntPtr owner)
+    internal delegate int FileOperation(ref SHFILEOPSTRUCT operation);
+
+    private static bool Run(uint func, IReadOnlyList<string> from, string? to, IntPtr owner, FileOperation? operation = null)
     {
         IntPtr pFrom = IntPtr.Zero, pTo = IntPtr.Zero;
         try
@@ -135,7 +140,7 @@ internal static class ShellOps
                 pTo    = pTo,
                 fFlags = (ushort)(FOF_ALLOWUNDO | FOF_NOCONFIRMMKDIR),
             };
-            return SHFileOperation(ref op) == 0 && op.fAnyOperationsAborted == 0;
+            return (operation ?? SHFileOperation)(ref op) == 0 && op.fAnyOperationsAborted == 0;
         }
         catch { return false; }
         finally
@@ -151,7 +156,7 @@ internal static class ShellOps
         => Marshal.StringToHGlobalUni(string.Join("\0", paths) + "\0");
 
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
-    private struct SHFILEOPSTRUCT
+    internal struct SHFILEOPSTRUCT
     {
         public IntPtr hwnd;
         public uint   wFunc;

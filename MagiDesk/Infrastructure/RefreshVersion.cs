@@ -4,6 +4,7 @@ namespace MagiDesk.Infrastructure;
 internal sealed class RefreshVersion
 {
     private long _value;
+    public long Current => _value;
     public long Next() => ++_value;
     public bool IsCurrent(long value) => value == _value;
 }

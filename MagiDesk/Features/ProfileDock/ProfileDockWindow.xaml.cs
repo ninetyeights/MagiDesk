@@ -1,3 +1,4 @@
+using MagiDesk.Infrastructure;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
@@ -92,6 +93,7 @@ public partial class ProfileDockWindow : Window
     /// the resources restyles the live visual tree — no button rebuild needed.</summary>
     private void ApplyTheme()
     {
+        using var trace = StartupTrace.Measure("dock.theme");
         var p = DockPalette.For(AppConfig.Current);
 
         // With the blur active the tint comes from the composition layer, so the
@@ -121,7 +123,8 @@ public partial class ProfileDockWindow : Window
         // Re-tint the blur so a theme flip (or a forced Light dock on a dark
         // Windows) restains the material, not just the WPF chrome.
         var h = new WindowInteropHelper(this).Handle;
-        if (_acrylic && h != IntPtr.Zero) DockBackdrop.TryEnableAcrylic(h, p.AcrylicTint);
+        if (_acrylic && h != IntPtr.Zero)
+            using (StartupTrace.Measure("dock.theme-backdrop")) DockBackdrop.TryEnableAcrylic(h, p.AcrylicTint);
 
         // Indicator fills are assigned imperatively, so re-run the last state.
         if (_lastStates is not null) UpdateStates(_lastStates);
@@ -183,7 +186,8 @@ public partial class ProfileDockWindow : Window
 
     protected override void OnSourceInitialized(EventArgs e)
     {
-        base.OnSourceInitialized(e);
+        using var trace = StartupTrace.Measure("dock.source-init");
+        using (StartupTrace.Measure("dock.source-base")) base.OnSourceInitialized(e);
         var h = new WindowInteropHelper(this).Handle;
         HwndSource.FromHwnd(h)?.AddHook(ThemeWndProc);
         int ex = GetWindowLong(h, GWL_EXSTYLE);
@@ -194,18 +198,32 @@ public partial class ProfileDockWindow : Window
         // Monitor-bound windows seat themselves on the target monitor first, so
         // the appbar's MonitorFromWindow resolves to the right screen and the
         // floating placement below restores physical coordinates after layout.
-        SeatOnTargetMonitor(h);
+        using (StartupTrace.Measure("dock.seat-monitor")) SeatOnTargetMonitor(h);
 
-        if (Mode == DockMode.AppBar) EnableAppBarMode(h);
+        if (Mode == DockMode.AppBar)
+            using (StartupTrace.Measure("dock.appbar")) EnableAppBarMode(h);
 
         // Acrylic blur. Has to come after AppBar mode is resolved — the corner
         // clipping differs between the flush strip and the floating island.
-        _acrylic = DockBackdrop.TryEnableAcrylic(h, DockPalette.For(AppConfig.Current).AcrylicTint);
+        using (StartupTrace.Measure("dock.initial-backdrop"))
+            _acrylic = DockBackdrop.TryEnableAcrylic(h, DockPalette.For(AppConfig.Current).AcrylicTint);
         ApplyTheme();
 
-        FullscreenWatcher.EnsureStarted();
+        using (StartupTrace.Measure("dock.fullscreen-start")) FullscreenWatcher.EnsureStarted();
         FullscreenWatcher.Changed += OnFullscreenChanged;
-        OnFullscreenChanged();
+        using (StartupTrace.Measure("dock.fullscreen-state")) OnFullscreenChanged();
+    }
+
+    protected override Size MeasureOverride(Size availableSize)
+    {
+        using var trace = StartupTrace.MeasureSlow("dock.measure");
+        return base.MeasureOverride(availableSize);
+    }
+
+    protected override Size ArrangeOverride(Size finalSize)
+    {
+        using var trace = StartupTrace.MeasureSlow("dock.arrange");
+        return base.ArrangeOverride(finalSize);
     }
 
     protected override void OnClosed(EventArgs e)

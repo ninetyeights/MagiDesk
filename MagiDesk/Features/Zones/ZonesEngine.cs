@@ -17,6 +17,7 @@ namespace MagiDesk.Features.Zones;
 internal sealed class ZonesEngine : IDisposable
 {
     private readonly Dispatcher _ui;
+    private bool _disposed;
     private readonly WinEventProc _proc; // keep delegate alive against GC
     private IntPtr _hookStart;
     private IntPtr _hookEnd;
@@ -79,18 +80,19 @@ internal sealed class ZonesEngine : IDisposable
     {
         altDragger.MoveDragStarted += hwnd => _ui.BeginInvoke(new Action(() =>
         {
-            if (!AppConfig.Current.ZonesEnabled) return;
+            if (_disposed || !AppConfig.Current.ZonesEnabled) return;
             DragStart(hwnd);
         }));
         altDragger.MoveDragEnded += () => _ui.BeginInvoke(new Action(() =>
         {
-            if (!AppConfig.Current.ZonesEnabled) return;
+            if (_disposed || !AppConfig.Current.ZonesEnabled) return;
             DragEnd();
         }));
     }
 
     public void Dispose()
     {
+        _disposed = true;
         AppConfig.Changed -= OnConfigChanged;
         if (_hookStart != IntPtr.Zero) { UnhookWinEvent(_hookStart); _hookStart = IntPtr.Zero; }
         if (_hookEnd   != IntPtr.Zero) { UnhookWinEvent(_hookEnd);   _hookEnd   = IntPtr.Zero; }
@@ -105,7 +107,7 @@ internal sealed class ZonesEngine : IDisposable
         if (idObject != 0) return;
         _ui.BeginInvoke(new Action(() =>
         {
-            if (!AppConfig.Current.ZonesEnabled) return;
+            if (_disposed || !AppConfig.Current.ZonesEnabled) return;
             if (evt == EVENT_SYSTEM_MOVESIZESTART) DragStart(hwnd);
             else if (evt == EVENT_SYSTEM_MOVESIZEEND) DragEnd();
         }));

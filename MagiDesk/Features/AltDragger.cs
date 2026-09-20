@@ -12,21 +12,18 @@ namespace MagiDesk.Features;
 ///   Alt + Left-drag  → move window under cursor
 ///   Alt + Right-drag → resize window under cursor (direction by 3×3 quadrant)
 ///
-/// The hook callback itself calls SetWindowPos synchronously. This is what
-/// AltSnap does by default: for responsive targets the round-trip is well
-/// under the low-level-hook timeout (~300 ms), and running on a worker
-/// thread just adds a SendMessage hop to the target's thread plus coalescing
-/// latency that shows up as jitter.
+/// Input and drag state live on a dedicated message-loop thread. Window moves
+/// are posted asynchronously so a busy target cannot block mouse input.
 /// </summary>
 internal sealed class AltDragger : IDisposable
 {
     private enum Mode { None, Move, Resize }
 
     private const uint MoveFlags =
-        SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_NOACTIVATE | SWP_NOSIZE | SWP_NOSENDCHANGING;
+        SWP_ASYNCWINDOWPOS | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_NOACTIVATE | SWP_NOSIZE | SWP_NOSENDCHANGING;
 
     private const uint ResizeFlags =
-        SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_NOACTIVATE | SWP_NOSENDCHANGING;
+        SWP_ASYNCWINDOWPOS | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_NOACTIVATE | SWP_NOSENDCHANGING;
 
     private const int MinSize    = 80;
     // Cap SetWindowPos frequency: 1000Hz gaming mice would otherwise flood the
@@ -39,8 +36,10 @@ internal sealed class AltDragger : IDisposable
     private const int DeadZonePx = 2;
 
     private readonly LowLevelMouseHook _hook;
+    private MouseHookThread? _thread;
 
     private Mode   _mode;
+    private bool _awaitingRestore;
     private IntPtr _target;
     private POINT  _anchorCursor;
     private RECT   _anchorWindow;
@@ -62,11 +61,11 @@ internal sealed class AltDragger : IDisposable
         _hook = new LowLevelMouseHook(OnMouseEvent);
     }
 
-    /// <summary>Fired on the UI thread when an Alt+LMB move drag begins.
+    /// <summary>Fired on the dedicated hook thread when an Alt+LMB move drag begins.
     /// Zones subscribe so they can activate on mid-drag Shift press.</summary>
     public event Action<IntPtr>? MoveDragStarted;
 
-    /// <summary>Fired on the UI thread when the Alt+LMB move drag ends.</summary>
+    /// <summary>Fired on the dedicated hook thread when the Alt+LMB move drag ends.</summary>
     public event Action? MoveDragEnded;
 
     /// <summary>Optional live-snap transform applied to the proposed window
@@ -76,7 +75,9 @@ internal sealed class AltDragger : IDisposable
     /// be cheap — it reads a per-drag snapshot, not live enumeration.</summary>
     public Func<RECT, RECT>? MoveSnap;
 
-    public void Start() => _hook.Install();
+    public void Start() => _thread ??= new MouseHookThread(_hook.Install, _hook.Dispose);
+
+    internal void Post(Action action) => _thread?.Post(action);
 
     /// <summary>
     /// Bump our hook to the front of the WH_MOUSE_LL chain. Called on a
@@ -84,15 +85,15 @@ internal sealed class AltDragger : IDisposable
     /// own low-level mouse hook can't permanently sit ahead of us and
     /// swallow mousemoves during Alt+RMB resize.
     /// </summary>
-    public void Reinstall()
+    public void Reinstall() => Post(() =>
     {
         // Never reinstall mid-drag — the tiny window with no hook installed
         // would strand us with stale _mode state and no way to see the UP.
         if (_mode != Mode.None) return;
         try { _hook.Reinstall(); } catch { /* best-effort */ }
-    }
+    });
 
-    public void Dispose() => _hook.Dispose();
+    public void Dispose() => _thread?.Dispose();
 
     // ---------------------------------------------------------------- hook
 
@@ -197,10 +198,12 @@ internal sealed class AltDragger : IDisposable
         if (IsBlacklistedClass(root)) return false;
 
         // Unmaximize so move/resize actually affects geometry.
-        if (IsZoomed(root)) ShowWindow(root, SW_RESTORE);
+        bool restoring = IsZoomed(root);
+        if (restoring && !ShowWindowAsync(root, SW_RESTORE)) return false;
 
         if (!GetWindowRect(root, out var rect)) return false;
 
+        _awaitingRestore = restoring;
         _target         = root;
         _mode           = resize ? Mode.Resize : Mode.Move;
         _anchorCursor   = data.pt;
@@ -260,6 +263,13 @@ internal sealed class AltDragger : IDisposable
 
     private void Apply(POINT cur, bool bypassDeadZone = false)
     {
+        if (_awaitingRestore)
+        {
+            // Never wait for another process (or our busy UI) to restore.
+            if (IsZoomed(_target) || !GetWindowRect(_target, out _anchorWindow)) return;
+            _awaitingRestore = false;
+            if (_mode == Mode.Resize) _resizeEdge = HitTestForResize(_anchorCursor, _anchorWindow);
+        }
         var dx = cur.X - _anchorCursor.X;
         var dy = cur.Y - _anchorCursor.Y;
 

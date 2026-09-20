@@ -8,14 +8,28 @@ namespace MagiDesk.Features.DesktopFences;
 internal sealed class VirtualItemCanvas : Canvas
 {
     private readonly Dictionary<int, FrameworkElement> _realized = new();
+    internal int RealizedCount => _realized.Count;
+    protected override Size MeasureOverride(Size constraint)
+    {
+        using var trace = MagiDesk.Infrastructure.StartupTrace.MeasureSlow("canvas.measure");
+        return base.MeasureOverride(constraint);
+    }
+    protected override Size ArrangeOverride(Size arrangeSize)
+    {
+        using var trace = MagiDesk.Infrastructure.StartupTrace.MeasureSlow("canvas.arrange");
+        return base.ArrangeOverride(arrangeSize);
+    }
     private readonly Action<FrameworkElement> _retire;
     private Func<int, FrameworkElement>? _build;
     private int _count;
+    private IReadOnlyList<object>? _itemKeys;
+    private object? _templateKey;
     private double _cellWidth, _cellHeight;
     public double ItemGap { get; set; }
     public bool FitItemHeight { get; set; }
     public bool DistributeHorizontalSpace { get; set; }
     public bool ColumnFirst { get; set; }
+    internal IReadOnlyList<Point>? ItemPositions { get; set; }
     internal int RowsPerColumn { get; private set; } = 1;
     private readonly Dictionary<int, double> _itemHeights = new();
 
@@ -36,8 +50,9 @@ internal sealed class VirtualItemCanvas : Canvas
         for (int i = 0; i < _count; i++)
         {
             var (column, row) = Cell(i, columns);
-            var bounds = new Rect(column * stride + inset,
-                row * _cellHeight + ItemGap / 2,
+            var point = ItemPositions is { } positions && i < positions.Count ? positions[i] : new Point(column * stride, row * _cellHeight);
+            var bounds = new Rect(point.X + inset,
+                point.Y + ItemGap / 2,
                 itemWidth, _itemHeights.GetValueOrDefault(i, Math.Max(0, _cellHeight - ItemGap)));
             if (area.IntersectsWith(bounds)) yield return i;
         }
@@ -57,16 +72,59 @@ internal sealed class VirtualItemCanvas : Canvas
         _count = count; _cellWidth = cellWidth; _cellHeight = cellHeight; _build = build;
     }
 
+    internal void SetItemsPreserving(IReadOnlyList<object> keys, object templateKey,
+        double cellWidth, double cellHeight, Func<int, FrameworkElement> build)
+    {
+        if (_itemKeys is null || !Equals(_templateKey, templateKey))
+            SetItems(keys.Count, cellWidth, cellHeight, build);
+        else
+        {
+            var nextIndices = keys.Select((key, index) => (key, index)).ToDictionary(p => p.key, p => p.index);
+            var retained = new Dictionary<int, FrameworkElement>();
+            var heights = new Dictionary<int, double>();
+            foreach (var (oldIndex, element) in _realized)
+            {
+                if (nextIndices.TryGetValue(_itemKeys[oldIndex], out int index))
+                {
+                    retained[index] = element;
+                    if (_itemHeights.TryGetValue(oldIndex, out double height)) heights[index] = height;
+                }
+                else { _retire(element); Children.Remove(element); }
+            }
+            _realized.Clear(); foreach (var pair in retained) _realized.Add(pair.Key, pair.Value);
+            _itemHeights.Clear(); foreach (var pair in heights) _itemHeights.Add(pair.Key, pair.Value);
+            _count = keys.Count; _cellWidth = cellWidth; _cellHeight = cellHeight; _build = build;
+            ItemPositions = null;
+        }
+        _itemKeys = keys; _templateKey = templateKey;
+    }
+
     public void ClearItems()
     {
+        _itemKeys = null; _templateKey = null;
         foreach (var element in _realized.Values) _retire(element);
-        _realized.Clear(); _itemHeights.Clear(); Children.Clear(); _count = 0; Height = 0; _build = null;
+        _realized.Clear(); _itemHeights.Clear(); Children.Clear(); _count = 0; Height = 0; _build = null; ItemPositions = null;
     }
 
     public void UpdateViewport(double width, double height, double offset)
     {
+        using var trace = MagiDesk.Infrastructure.StartupTrace.MeasureSlow("canvas.viewport");
         if (_build is null || width <= 0 || !double.IsFinite(width)) return;
         var (columns, stride, itemWidth, inset) = HorizontalLayout(width);
+        if (ItemPositions is { } positions && positions.Count == _count)
+        {
+            Width = width;
+            Height = Math.Max(height, positions.Count == 0 ? 0 : positions.Max(p => p.Y) + _cellHeight);
+            var visible = Enumerable.Range(0, _count).Where(i => height > 0
+                && positions[i].Y <= offset + height + _cellHeight
+                && positions[i].Y + Math.Max(_cellHeight, _itemHeights.GetValueOrDefault(i)) >= offset - _cellHeight).ToHashSet();
+            foreach (var index in _realized.Keys.Where(i => !visible.Contains(i)).ToArray())
+            {
+                var element = _realized[index]; _retire(element); Children.Remove(element); _realized.Remove(index);
+            }
+            foreach (int index in visible) LayoutItem(index, itemWidth, positions[index].X + inset, positions[index].Y + ItemGap / 2);
+            return;
+        }
         RowsPerColumn = double.IsFinite(height) ? Math.Max(1, (int)(height / _cellHeight)) : 1;
         int pageSize = columns * RowsPerColumn;
         int rows = ColumnFirst ? (int)Math.Ceiling((double)_count / pageSize) * RowsPerColumn
@@ -95,9 +153,17 @@ internal sealed class VirtualItemCanvas : Canvas
         }
         for (int i = start; i < end; i++)
         {
+            var (column, row) = Cell(i, columns);
+            LayoutItem(i, itemWidth, column * stride + inset, row * _cellHeight + ItemGap / 2);
+        }
+    }
+
+    private void LayoutItem(int i, double itemWidth, double left, double top)
+    {
+            using var trace = MagiDesk.Infrastructure.StartupTrace.MeasureSlow("canvas.tile-layout");
             if (!_realized.TryGetValue(i, out var element))
             {
-                element = _build(i); _realized.Add(i, element); Children.Add(element);
+                element = _build!(i); _realized.Add(i, element); Children.Add(element);
             }
             element.Width = itemWidth;
             element.Height = Math.Max(0, _cellHeight - ItemGap);
@@ -109,10 +175,8 @@ internal sealed class VirtualItemCanvas : Canvas
                     : Math.Min(element.DesiredSize.Height, Math.Max(0, _cellHeight - ItemGap));
             }
             _itemHeights[i] = element.Height;
-            var (column, row) = Cell(i, columns);
-            SetLeft(element, column * stride + inset);
-            SetTop(element, row * _cellHeight + ItemGap / 2);
-        }
+            SetLeft(element, left);
+            SetTop(element, top);
     }
 
     private (int Column, int Row) Cell(int index, int columns)
@@ -124,5 +188,13 @@ internal sealed class VirtualItemCanvas : Canvas
     }
 
     internal double ItemTop(int index)
-        => Cell(index, HorizontalLayout(Width).Columns).Row * _cellHeight;
+        => ItemPositions is { } positions ? positions[index].Y : Cell(index, HorizontalLayout(Width).Columns).Row * _cellHeight;
+
+    internal Point ItemPosition(int index)
+    {
+        if (ItemPositions is { } positions) return positions[index];
+        var layout = HorizontalLayout(Width);
+        var cell = Cell(index, layout.Columns);
+        return new Point(cell.Column * layout.Stride, cell.Row * _cellHeight);
+    }
 }

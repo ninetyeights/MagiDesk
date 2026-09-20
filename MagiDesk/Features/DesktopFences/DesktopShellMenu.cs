@@ -5,7 +5,41 @@ namespace MagiDesk.Features.DesktopFences;
 /// <summary>Obtain Explorer's desktop background menu, not the Desktop directory menu.</summary>
 internal sealed class DesktopShellMenu : IDisposable
 {
-    internal readonly record struct ViewSettings(int IconSize, bool ShowIcons, MagiDesk.Config.SortBy? Sort, bool Descending);
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativePoint { public int X, Y; }
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool ClientToScreen(IntPtr hwnd, ref NativePoint point);
+
+    internal static Dictionary<string, System.Windows.Point> CapturePositions()
+    {
+        var result = new Dictionary<string, System.Windows.Point>(StringComparer.OrdinalIgnoreCase);
+        using var desktop = new DesktopShellMenu();
+        IntPtr menu = IntPtr.Zero;
+        try
+        {
+            var iid = new Guid("000214E4-0000-0000-C000-000000000046");
+            if (desktop.GetMenu(ref iid, out menu) < 0 || desktop._view is not IFolderView2 view
+                || !DesktopIcons.TryLocate(out _, out var list, out _)
+                || view.ItemCount(2, out int count) < 0) return result;
+            for (int i = 0; i < count; i++)
+            {
+                if (view.Item(i, out var pidl) < 0 || pidl == IntPtr.Zero) continue;
+                try
+                {
+                    var path = Name(pidl, 0x80028000);
+                    if (path is not null && view.GetItemPosition(pidl, out var point) >= 0 && ClientToScreen(list, ref point))
+                        result[path] = new System.Windows.Point(point.X, point.Y);
+                }
+                finally { Marshal.FreeCoTaskMem(pidl); }
+            }
+        }
+        catch (Exception ex) { MagiDesk.Infrastructure.DiagnosticLog.Write($"DESKTOP-LAYOUT import: {ex.GetType().Name}\n"); }
+        finally { if (menu != IntPtr.Zero) Marshal.Release(menu); }
+        return result;
+    }
+    internal readonly record struct ViewSettings(int IconSize, bool ShowIcons, MagiDesk.Config.SortBy? Sort, bool Descending,
+        bool AutoArrange = true, bool SnapToGrid = true);
     private object? _windows, _desktop, _browser;
     private IShellView? _view;
 
@@ -44,7 +78,8 @@ internal sealed class DesktopShellMenu : IDisposable
                     descending = columns[0].Direction < 0;
                 }
             }
-            return new ViewSettings(Math.Clamp(size, 16, 256), (flags & 0x1000) == 0, sort, descending);
+            return new ViewSettings(Math.Clamp(size, 16, 256), (flags & 0x1000) == 0, sort, descending,
+                (flags & 1) != 0, (flags & 4) != 0);
         }
         catch (Exception ex)
         {
@@ -55,6 +90,7 @@ internal sealed class DesktopShellMenu : IDisposable
 
     internal static ViewSettings? CaptureSettings()
     {
+        using var trace = MagiDesk.Infrastructure.StartupTrace.Measure("shell.desktop-settings");
         using var desktop = new DesktopShellMenu();
         IntPtr menu = IntPtr.Zero;
         try
@@ -67,7 +103,12 @@ internal sealed class DesktopShellMenu : IDisposable
     }
 
     internal static IReadOnlyList<DesktopItem> CaptureNamespaceItems()
+        => CaptureNamespaceItems(out _);
+
+    internal static IReadOnlyList<DesktopItem> CaptureNamespaceItems(out bool succeeded)
     {
+        using var trace = MagiDesk.Infrastructure.StartupTrace.Measure("shell.namespace-items");
+        succeeded = false;
         var items = new List<DesktopItem>();
         using var desktop = new DesktopShellMenu();
         IntPtr menu = IntPtr.Zero;
@@ -79,7 +120,7 @@ internal sealed class DesktopShellMenu : IDisposable
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             for (int i = 0; i < count; i++)
             {
-                if (view.Item(i, out var pidl) < 0 || pidl == IntPtr.Zero) continue;
+                if (view.Item(i, out var pidl) < 0 || pidl == IntPtr.Zero) return items;
                 try
                 {
                     // Keep namespace identities (including the user's home icon),
@@ -91,6 +132,7 @@ internal sealed class DesktopShellMenu : IDisposable
                 }
                 finally { Marshal.FreeCoTaskMem(pidl); }
             }
+            succeeded = true;
         }
         catch (Exception ex)
         { MagiDesk.Infrastructure.DiagnosticLog.Write($"DESKTOP-SHELL enumerate failed: {ex.Message}\n"); }
@@ -129,7 +171,8 @@ internal sealed class DesktopShellMenu : IDisposable
         [PreserveSig] int Item(int index, out IntPtr pidl);
         [PreserveSig] int ItemCount(uint flags, out int count);
         void Items(); void GetSelectionMarkedItem(); void GetFocusedItem();
-        void GetItemPosition(); void GetSpacing(); void GetDefaultSpacing(); void GetAutoArrange();
+        [PreserveSig] int GetItemPosition(IntPtr pidl, out NativePoint position);
+        void GetSpacing(); void GetDefaultSpacing(); void GetAutoArrange();
         void SelectItem(); void SelectAndPositionItems();
         void SetGroupBy(); void GetGroupBy(); void SetViewProperty(); void GetViewProperty();
         void SetTileViewProperties(); void SetExtendedTileViewProperties(); void SetText(); void SetCurrentFolderFlags();

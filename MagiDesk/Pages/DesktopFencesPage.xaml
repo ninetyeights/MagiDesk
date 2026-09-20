@@ -81,7 +81,7 @@
                 <ui:Card HorizontalAlignment="Stretch" Padding="18,16" Margin="0,0,0,12">
                     <StackPanel>
                         <TextBlock Text="盒子外观" FontWeight="SemiBold"/>
-                        <TextBlock Text="选择单个盒子或全部盒子，调整外观。" Margin="0,4,0,12"/>
+                        <TextBlock Text="选择盒子或分页，调整其外观。" Margin="0,4,0,12"/>
                         <ComboBox x:Name="AppearanceBox" DisplayMemberPath="Name" SelectedValuePath="Id"
                                   HorizontalAlignment="Stretch" SelectionChanged="AppearanceBox_Changed"/>
                         <TextBlock x:Name="AppearanceEmpty" Text="暂无盒子，请先启用或新建盒子。" Margin="0,8,0,0"/>
@@ -117,30 +117,7 @@
                     </StackPanel>
                 </ui:Card>
 
-                <ui:Card HorizontalAlignment="Stretch" Padding="18,16" Margin="0,0,0,12">
-                    <StackPanel>
-                        <TextBlock Text="桌面项（调试）" FontWeight="SemiBold" Margin="0,0,0,8"/>
-                        <ui:Button Content="列出桌面项" Padding="12,8" Click="BtnList_Click"/>
-                        <ui:Button x:Name="BtnVisibilityProbe" Content="测试原生桌面绘制接口" Padding="12,8"
-                                   Margin="0,8,0,0" Click="BtnVisibilityProbe_Click"/>
-                        <TextBlock Text="临时请求单图标绘制通知，5 秒后恢复并检查结果。本阶段不隐藏图标，不修改文件或图标位置。"
-                                   TextWrapping="Wrap" Margin="0,6,0,0" FontSize="12"/>
-                        <TextBlock x:Name="VisibilityProbeStatus" TextWrapping="Wrap" Margin="0,6,0,0"/>
-                        <TextBlock Text="单图标隐藏实验：填写桌面文件或文件夹的完整路径" Margin="0,12,0,4" TextWrapping="Wrap"/>
-                        <TextBox x:Name="ProbeTargetPath"/>
-                        <CheckBox x:Name="ProbeInteraction" Content="同时测试交互拦截（实验性，含虚拟列表选择修正）"
-                                  IsChecked="False" Margin="0,8,0,0"/>
-                        <ui:Button x:Name="BtnHideProbe" Content="临时隐藏指定图标（15 秒）" Padding="12,8"
-                                   Margin="0,8,0,0" Click="BtnVisibilityProbe_Click"/>
-                        <TextBlock Text="默认只验证视觉隐藏与恢复，隐藏位置仍可能响应操作。交互拦截单独测试；两种模式均为 15 秒，尚不用于日常整理。"
-                                   TextWrapping="Wrap" Margin="0,6,0,0" FontSize="12"/>
-                        <TextBox x:Name="Output" IsReadOnly="True" TextWrapping="NoWrap"
-                                 VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
-                                 MinHeight="180" Margin="0,10,0,0"
-                                 FontFamily="Consolas" FontSize="12"
-                                 BorderThickness="0" Background="Transparent"/>
-                    </StackPanel>
-                </ui:Card>
+
             </StackPanel>
         </Grid>
     </ScrollViewer>

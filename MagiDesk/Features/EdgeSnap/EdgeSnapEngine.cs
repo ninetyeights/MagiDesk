@@ -48,7 +48,7 @@ internal sealed class EdgeSnapEngine : IDisposable
         altDragger.MoveDragStarted += OnMoveDragStarted;
         altDragger.MoveDragEnded += OnMoveDragEnded;
         AppConfig.Changed += OnConfigChanged;
-        altDragger.MoveSnap = Adjust;
+        altDragger.Post(() => altDragger.MoveSnap = Adjust);
     }
 
     public void Dispose()
@@ -58,8 +58,12 @@ internal sealed class EdgeSnapEngine : IDisposable
             _attached.MoveDragStarted -= OnMoveDragStarted;
             _attached.MoveDragEnded -= OnMoveDragEnded;
             AppConfig.Changed -= OnConfigChanged;
-            OnMoveDragEnded();
-            if (_attached.MoveSnap == Adjust) _attached.MoveSnap = null;
+            var attached = _attached;
+            attached.Post(() =>
+            {
+                OnMoveDragEnded();
+                if (attached.MoveSnap == Adjust) attached.MoveSnap = null;
+            });
             _attached = null;
         }
     }
@@ -86,60 +90,50 @@ internal sealed class EdgeSnapEngine : IDisposable
         _insetL = _insetT = _insetR = _insetB = 0;
     }
 
-    private void OnConfigChanged()
+    private void OnConfigChanged() => _attached?.Post(() =>
     {
         if (_dragged != IntPtr.Zero && AppConfig.Current.EdgeSnapEnabled && !_snapshotReady)
             QueueSnapshot();
-    }
+    });
 
     private void QueueSnapshot()
     {
         long version = ++_snapshotVersion;
+        var dragged = _dragged;
+        var attached = _attached;
         _ui.BeginInvoke(new Action(() =>
         {
-            if (version == _snapshotVersion && _dragged != IntPtr.Zero) Snapshot();
-        }));
-    }
-
-    // ================================================= snapshot + snap math
-
-    private void Snapshot()
-    {
-        _monitorWork.Clear();
-        _windows.Clear();
-        _insetL = _insetT = _insetR = _insetB = 0;
-
-        var cfg = AppConfig.Current;
-        if (!cfg.EdgeSnapEnabled || !IsWindow(_dragged)) return;
-
-        // Capture the dragged window's invisible-border insets so we can snap
-        // its VISIBLE edges (otherwise every snap lands ~7 px off).
-        if (GetWindowRect(_dragged, out var dwr))
-        {
-            var dfr = VisibleRect(_dragged);
-            _insetL = dfr.Left   - dwr.Left;
-            _insetT = dfr.Top    - dwr.Top;
-            _insetR = dwr.Right  - dfr.Right;
-            _insetB = dwr.Bottom - dfr.Bottom;
-        }
-
-        // Capture all target types once so switches take effect immediately,
-        // without enumerating from the mouse hook when a target is enabled.
-        foreach (var m in MonitorEnumerator.All())
-            _monitorWork.Add(m.WorkArea);
-
-        {
-            EnumWindows((h, _) =>
+            // Build private collections on the UI thread; publish atomically by
+            // posting back to the owner. No list is ever mutated across threads.
+            if (!AppConfig.Current.EdgeSnapEnabled || !IsWindow(dragged)) return;
+            var monitors = new List<RECT>();
+            var windows = new List<RECT>();
+            int left = 0, top = 0, right = 0, bottom = 0;
+            if (GetWindowRect(dragged, out var wr))
             {
-                if (h != _dragged && IsSnapCandidate(h))
+                var frame = VisibleRect(dragged);
+                left = frame.Left - wr.Left; top = frame.Top - wr.Top;
+                right = wr.Right - frame.Right; bottom = wr.Bottom - frame.Bottom;
+            }
+            foreach (var monitor in MonitorEnumerator.All()) monitors.Add(monitor.WorkArea);
+            EnumWindows((hwnd, _) =>
+            {
+                if (hwnd != dragged && IsSnapCandidate(hwnd))
                 {
-                    var vr = VisibleRect(h); // visible bounds, matches monitor space
-                    if (vr.Width > 0 && vr.Height > 0) _windows.Add(vr);
+                    var rect = VisibleRect(hwnd);
+                    if (rect.Width > 0 && rect.Height > 0) windows.Add(rect);
                 }
                 return true;
             }, IntPtr.Zero);
-        }
-        _snapshotReady = true;
+            attached?.Post(() =>
+            {
+                if (version != _snapshotVersion || dragged != _dragged) return;
+                _monitorWork.Clear(); _monitorWork.AddRange(monitors);
+                _windows.Clear(); _windows.AddRange(windows);
+                _insetL = left; _insetT = top; _insetR = right; _insetB = bottom;
+                _snapshotReady = true;
+            });
+        }));
     }
 
     /// <summary>Adjust a proposed (moving) window rect so a VISIBLE edge within

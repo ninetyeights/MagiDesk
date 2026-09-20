@@ -27,6 +27,29 @@ public sealed partial class DesktopFenceService : IDisposable
     private string? _frontBoxId;
     private bool _boxOrderQueued;
     private bool _applyingBoxOrder;
+    private DesktopMembershipSnapshot? _membershipSnapshot;
+    internal string DesktopPositionKey(string path) => _membershipSnapshot?.Files.GetValueOrDefault(path) is { } identity
+        ? identity : path.ToUpperInvariant();
+
+    internal void SaveDesktopPositions(IEnumerable<KeyValuePair<string, Point>> positions, bool imported = false, string? monitorId = null)
+    {
+        var config = AppConfig.Current;
+        bool changed = imported && !config.DesktopIconPositionsImported;
+        if (imported) config.DesktopIconPositionsImported = true;
+        foreach (var (key, point) in positions)
+        {
+            if (!double.IsFinite(point.X) || !double.IsFinite(point.Y)) continue;
+            config.DesktopIconPositions.TryGetValue(key, out var old);
+            string? monitor = monitorId ?? old?.MonitorId;
+            if (old is { HasPosition: true } && old.X == point.X && old.Y == point.Y && old.MonitorId == monitor) continue;
+            config.DesktopIconPositions[key] = new() { X = point.X, Y = point.Y, MonitorId = monitor };
+            changed = true;
+        }
+        // Keep history bounded after long-running desktop churn.
+        foreach (var key in config.DesktopIconPositions.Keys.Take(Math.Max(0, config.DesktopIconPositions.Count - 8192)).ToArray())
+            config.DesktopIconPositions.Remove(key);
+        if (changed) config.Save();
+    }
 
     internal void BringBoxForward(string id, string source = "request")
     {
@@ -86,7 +109,10 @@ public sealed partial class DesktopFenceService : IDisposable
         // during that pass they'd get Mica'd (a gray flash); creating them after
         // it means they start (and stay) backdrop-free.
         if (AppConfig.Current.DesktopFencesEnabled)
+        {
+            MagiDesk.Infrastructure.StartupTrace.Mark("fences.activation-queued");
             _ui.BeginInvoke(new Action(Activate), DispatcherPriority.ApplicationIdle);
+        }
     }
 
     public void Dispose()
@@ -124,8 +150,10 @@ public sealed partial class DesktopFenceService : IDisposable
     {
         var paths = box.IsUnsorted
             ? new HashSet<string>(boxes.Where(b => !b.IsUnsorted && b.FolderPath is null).SelectMany(b => b.Members), StringComparer.OrdinalIgnoreCase)
-            : new HashSet<string>(box.Members, StringComparer.OrdinalIgnoreCase);
-        return items.Where(item => box.IsUnsorted ? !paths.Contains(item.Path) : paths.Contains(item.Path)).ToList();
+            : new HashSet<string>(box.IsRuleCategory
+                ? DesktopTabGroups.Members(boxes, box).SelectMany(p => p.Members) : box.Members, StringComparer.OrdinalIgnoreCase);
+        var resolved = items.Where(item => box.IsUnsorted ? !paths.Contains(item.Path) : paths.Contains(item.Path)).ToList();
+        return BoxClassification.Filter(box, boxes, resolved, DateTime.UtcNow);
     }
 
     /// <summary>Live on-screen rects (DIPs) of the other boxes — used as snap
@@ -174,13 +202,16 @@ public sealed partial class DesktopFenceService : IDisposable
 
     private void Activate()
     {
+        using var trace = MagiDesk.Infrastructure.StartupTrace.Measure("fences.activate");
         if (_disposed || _active || !AppConfig.Current.DesktopFencesEnabled) return;
         _active = true;
+        _startupWatch.Restart();
+        _menuPrewarmQueued = false;
         _unifiedSurface = AppConfig.Current.DesktopUnifiedSurface;
         if (DesktopTabMigration.ConvertToBoxes(AppConfig.Current.DesktopBoxes))
             AppConfig.Current.Save();
         EnsureUnsorted();
-        if (_unifiedSurface) StartDesktopSurfaceWatching();
+        StartDesktopSurfaceWatching();
         Render();
 
         // Warm the shell context-menu extensions so the first right-click on a
@@ -188,7 +219,7 @@ public sealed partial class DesktopFenceService : IDisposable
         // DLLs (can take seconds), so it MUST run off the UI thread — the DLLs
         // load process-wide, so warming them on a worker still speeds up the
         // later UI-thread menu.
-        Task.Run(PrewarmShellMenu);
+        // ContentLoaded schedules this after the first content has been applied.
 
         // Unlike the taskbar, plain top-level windows aren't auto-suppressed by
         // a fullscreen app (e.g. a browser going fullscreen via F11 keeps the
@@ -304,7 +335,7 @@ public sealed partial class DesktopFenceService : IDisposable
         var boxes = AppConfig.Current.DesktopBoxes;
         var box = boxes.FirstOrDefault(b => b.Id == id);
         if (box is null || box.IsUnsorted) return;   // can't delete the catch-all
-        boxes.Remove(box);                            // members fall back to unsorted
+        foreach (var page in DesktopTabGroups.Members(boxes, box)) boxes.Remove(page);
         AppConfig.Current.Save();
         if (_active) Render();
     }
@@ -338,7 +369,10 @@ public sealed partial class DesktopFenceService : IDisposable
         AppConfig.Current.Save();
         if (!_active) return;
         foreach (var box in boxes)
+        {
+            foreach (var host in _windows.Values) host.InvalidateCachedTab(box.Id);
             if (_windows.TryGetValue(box.Id, out var window)) window.RefreshAppearance();
+        }
     }
 
     private void Relayout(string id, Action<DesktopBox> change, bool appearanceOnly = false)
@@ -346,6 +380,7 @@ public sealed partial class DesktopFenceService : IDisposable
         var box = AppConfig.Current.DesktopBoxes.FirstOrDefault(b => b.Id == id);
         if (box is null) return;
         change(box);
+        foreach (var host in _windows.Values) host.InvalidateCachedTab(id);
         AppConfig.Current.Save();
         if (_active && _windows.TryGetValue(id, out var w))
         {
@@ -372,12 +407,7 @@ public sealed partial class DesktopFenceService : IDisposable
         var boxes = AppConfig.Current.DesktopBoxes;
         var target = boxes.FirstOrDefault(b => b.Id == boxId);
         if (target is null || target.FolderPath is not null) return;
-        foreach (var path in paths.Distinct(StringComparer.OrdinalIgnoreCase))
-        {
-            foreach (var b in boxes)
-                b.Members.RemoveAll(p => p.Equals(path, StringComparison.OrdinalIgnoreCase));
-            if (!target.IsUnsorted) target.Members.Add(path);
-        }
+        DesktopMembershipRecovery.Assign(boxes, target, paths, _membershipSnapshot);
         AppConfig.Current.Save();
         if (_active) Render();
     }
@@ -388,18 +418,32 @@ public sealed partial class DesktopFenceService : IDisposable
         if (source == target) return;
         if (Directory.Exists(source)) Directory.Move(source, target);
         else File.Move(source, target); // Never overwrite a different file.
-        string Remap(string path) => path.Equals(source, StringComparison.OrdinalIgnoreCase) ? target
-            : path.StartsWith(source + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
-                ? target + path[source.Length..] : path;
-        foreach (var box in AppConfig.Current.DesktopBoxes)
-        {
-            for (int i = 0; i < box.Members.Count; i++) box.Members[i] = Remap(box.Members[i]);
-            if (box.FolderPath is { } folder) box.FolderPath = Remap(folder);
-            if (_windows.TryGetValue(box.Id, out var window)) window.RemapNavigation(Remap);
-        }
+        ApplyPathRename(source, target);
         ThumbnailLoader.Invalidate(source);
         AppConfig.Current.Save();
         if (_active) Render();
+    }
+
+    private bool ApplyPathRename(string source, string target)
+    {
+        bool changed = DesktopPathRename.Apply(Boxes, source, target);
+        foreach (var window in _windows.Values)
+            window.RemapNavigation(path => DesktopPathRename.Remap(path, source, target));
+        return changed;
+    }
+
+    private bool _menuPrewarmQueued;
+    private readonly System.Diagnostics.Stopwatch _startupWatch = new();
+    internal void ContentLoaded()
+    {
+        if (_menuPrewarmQueued || !_active) return;
+        _menuPrewarmQueued = true;
+        MagiDesk.Infrastructure.DiagnosticLog.Write($"DESKTOP-LOAD first-content ms={_startupWatch.ElapsedMilliseconds}\n");
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(3000).ConfigureAwait(false);
+            if (_active && !_disposed) PrewarmShellMenu();
+        });
     }
 
     /// <summary>Persist a box's moved/resized bounds + collapsed state without a
@@ -409,6 +453,7 @@ public sealed partial class DesktopFenceService : IDisposable
         var box = AppConfig.Current.DesktopBoxes.FirstOrDefault(b => b.Id == id);
         if (box is null) return;
         box.X = x; box.Y = y; box.W = w; box.H = h; box.Collapsed = collapsed;
+        foreach (var page in TabPages(box)) DesktopTabGroups.CopyGeometry(box, page);
         AppConfig.Current.Save();
     }
 
@@ -416,12 +461,13 @@ public sealed partial class DesktopFenceService : IDisposable
 
     private void Render()
     {
+        using var trace = MagiDesk.Infrastructure.StartupTrace.Measure("fences.render-ui");
         long version = _renderVersion.Next();
         var cfg = AppConfig.Current;
 
         // Window lifecycle (create/close) runs on the UI thread from the box list
         // alone — no enumeration needed. Folder boxes fill themselves (async).
-        var visibleBoxes = cfg.DesktopBoxes.Where(b => !_unifiedSurface || !b.IsUnsorted).ToList();
+        var visibleBoxes = DesktopTabGroups.Visible(cfg.DesktopBoxes.Where(b => !_unifiedSurface || !b.IsUnsorted)).ToList();
         var live = visibleBoxes.Select(b => b.Id).ToHashSet();
         foreach (var id in _windows.Keys.Where(k => !live.Contains(k)).ToList())
         {
@@ -433,10 +479,10 @@ public sealed partial class DesktopFenceService : IDisposable
         {
             if (!_windows.TryGetValue(box.Id, out var win))
             {
-                win = new FenceBoxWindow(box, this);
+                win = MagiDesk.Infrastructure.StartupTrace.Run("box.construct", () => new FenceBoxWindow(box, this));
                 _windows[box.Id] = win;
                 win.Deactivated += (_, _) => CheckPeekFocus();
-                win.Show();
+                using (MagiDesk.Infrastructure.StartupTrace.Measure("box.show")) win.Show();
                 if (IsPeeking) win.SetPeek(true);
                 else win.PlaceOnDesktop();
                 if (!IsPeeking) SinkBoxIfItsMonitorIsFullscreen(win);   // box added mid-fullscreen
@@ -448,7 +494,19 @@ public sealed partial class DesktopFenceService : IDisposable
         // do it off the UI thread, then fill each box back on the UI thread.
         if (!cfg.DesktopBoxes.Any(b => b.FolderPath is null)) return;
         bool includeShellItems = _unifiedSurface;
-        Task.Run(() => DesktopItems.Enumerate(includeShellItems)).ContinueWith(t =>
+        bool importPositions = includeShellItems && !cfg.DesktopMultiMonitorImported;
+        Task.Run(async () =>
+        {
+            var watch = System.Diagnostics.Stopwatch.StartNew();
+            var membership = Task.Run(() => MagiDesk.Infrastructure.StartupTrace.Run("desktop.membership", () => DesktopMembershipSnapshot.Capture(DesktopItems.DesktopFolders())));
+            var positions = Task.Run(() => importPositions ? DesktopShellMenu.CapturePositions() : null);
+            var enumeration = Task.Run(() => MagiDesk.Infrastructure.StartupTrace.Run("desktop.enumeration", () => DesktopItems.Enumerate(includeShellItems)));
+            // Always observe both workers, including if the other one fails.
+            await Task.WhenAll(membership, positions, enumeration).ConfigureAwait(false);
+            var items = enumeration.Result;
+            MagiDesk.Infrastructure.DiagnosticLog.Write($"DESKTOP-LOAD snapshot count={items.Count} ms={watch.ElapsedMilliseconds}\n");
+            return (Items: items, Membership: membership.Result, Positions: positions.Result, Ready: System.Diagnostics.Stopwatch.GetTimestamp());
+        }).ContinueWith(t =>
         {
             if (t.IsFaulted)
             {
@@ -458,14 +516,36 @@ public sealed partial class DesktopFenceService : IDisposable
             }
             if (t.IsCanceled) return;
             if (!_active || !_renderVersion.IsCurrent(version)) return;
-            var items = t.Result;
-            if (_unifiedSurface) RenderDesktopSurface(items);
+            MagiDesk.Infrastructure.StartupTrace.Mark("desktop.ui-ready", $"waitMs={System.Diagnostics.Stopwatch.GetElapsedTime(t.Result.Ready).TotalMilliseconds:F0}");
+            using var applyTrace = MagiDesk.Infrastructure.StartupTrace.Measure("desktop.apply-ui");
+            var items = t.Result.Items;
+            _allDesktopItems = items;
+            if (_membershipSnapshot is { } previous)
+                foreach (var path in t.Result.Membership.ChangedPaths(previous)) ThumbnailLoader.Invalidate(path);
+            _membershipSnapshot = t.Result.Membership;
+            if (DesktopMonitorLayout.PromotePathPositions(cfg.DesktopIconPositions, _membershipSnapshot.Files)) cfg.Save();
+            if (DesktopMembershipRecovery.Reconcile(cfg.DesktopBoxes, _membershipSnapshot, DateTime.UtcNow,
+                (source, target) =>
+                {
+                    foreach (var box in cfg.DesktopBoxes)
+                        if (box.FolderPath is { } folder) box.FolderPath = DesktopPathRename.Remap(folder, source, target);
+                    foreach (var window in _windows.Values)
+                        window.RemapNavigation(path => DesktopPathRename.Remap(path, source, target));
+                    MagiDesk.Infrastructure.DiagnosticLog.Write("DESKTOP-MEMBERSHIP recovered identity after missed event\n");
+                }))
+            {
+                cfg.Save();
+                foreach (var box in cfg.DesktopBoxes.Where(b => b.FolderPath is not null))
+                    if (_windows.TryGetValue(box.Id, out var portal)) portal.RefreshFolder();
+            }
+            if (_unifiedSurface) RenderDesktopSurface(items, t.Result.Positions);
             foreach (var box in cfg.DesktopBoxes)
             {
                 if (box.FolderPath is not null) continue;
                 if (!_windows.TryGetValue(box.Id, out var win)) continue;
                 win.Render(ResolveBoxItems(box, items));
             }
-        }, CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.FromCurrentSynchronizationContext());
+            ContentLoaded();
+        }, CancellationToken.None, TaskContinuationOptions.None, new MagiDesk.Infrastructure.ContentTaskScheduler(_ui));
     }
 }

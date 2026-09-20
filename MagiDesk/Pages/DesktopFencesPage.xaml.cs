@@ -1,4 +1,3 @@
-using System.Text;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -15,7 +14,6 @@ public partial class DesktopFencesPage : Page
 {
     private bool _loading;
     private bool _recordingPeekHotkey;
-    private const string AllBoxesId = "*";
     private string _displayedHex = "";
     private sealed record BoxChoice(string Id, string Name);
 
@@ -59,76 +57,15 @@ public partial class DesktopFencesPage : Page
         AppConfig.Current.Save();
     }
 
-    private async void BtnVisibilityProbe_Click(object sender, RoutedEventArgs e)
-    {
-        bool hideTarget = ReferenceEquals(sender, BtnHideProbe);
-        bool protectInteraction = hideTarget && ProbeInteraction.IsChecked == true;
-        string target = ProbeTargetPath.Text.Trim().Trim('"');
-        if (hideTarget && string.IsNullOrWhiteSpace(target))
-        {
-            VisibilityProbeStatus.Text = "请先填写要测试的桌面文件或文件夹的完整路径。";
-            return;
-        }
-        if (!System.IO.File.Exists(DesktopDrawProbe.LibraryPath))
-        {
-            VisibilityProbeStatus.Text = "缺少原生探针组件。需先按 native/DesktopDrawProbe/README.md 编译，并将 DLL 放到 MagiDesk.exe 同目录；普通 .NET 编译不会生成它。";
-            return;
-        }
-        BtnVisibilityProbe.IsEnabled = false;
-        BtnHideProbe.IsEnabled = false;
-        try
-        {
-            var executable = Environment.ProcessPath;
-            if (string.IsNullOrEmpty(executable) || System.IO.Path.GetFileNameWithoutExtension(executable).Equals("dotnet", StringComparison.OrdinalIgnoreCase))
-                throw new InvalidOperationException("请通过 MagiDesk.exe 启动后测试。");
-            var start = new System.Diagnostics.ProcessStartInfo(executable)
-            {
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                WindowStyle = System.Diagnostics.ProcessWindowStyle.Hidden,
-            };
-            start.ArgumentList.Add(DesktopDrawProbe.Argument);
-            if (hideTarget) start.ArgumentList.Add(target);
-            if (protectInteraction) start.ArgumentList.Add("--interaction");
-            start.ArgumentList.Add($"--owner-pid={Environment.ProcessId}");
-            VisibilityProbeStatus.Text = hideTarget
-                ? protectInteraction
-                    ? "正在测试隐藏与交互，约 15–18 秒。请检查隐藏位置的点击、框选、Ctrl+A 和方向键选择，并观察到期恢复。"
-                    : "正在测试视觉隐藏，约 15–18 秒。请观察目标消失与恢复，期间不要操作隐藏位置。"
-                : "正在临时请求单图标绘制通知，约 5–8 秒。请让原生桌面图标可见；本次不会隐藏图标。";
-            using var process = System.Diagnostics.Process.Start(start)
-                ?? throw new InvalidOperationException("无法启动测试进程。");
-            await process.WaitForExitAsync();
-            VisibilityProbeStatus.Text = process.ExitCode switch
-            {
-                0 when protectInteraction => "隐藏及交互实验已结束，临时处理已移除。请确认各项实际操作结果；日志计数不代表完整交互验证通过。",
-                0 when hideTarget => "视觉隐藏实验已结束，临时处理已移除。请确认目标消失并恢复；本次未拦截交互。",
-                0 => "已观察到单图标绘制通知，临时处理已移除。尚未启用隐藏，下一步可验证拦截与交互。",
-                2 => "已有图标测试正在执行，请稍后重试。",
-                3 => "临时处理已移除，但未观察到单图标绘制通知。需查看日志中的 modified 和 notifyItem 判断绘制路径。",
-                5 => "缺少原生探针组件，请先编译原生项目。",
-                6 => "临时处理已移除，但没有拦截到目标图标。请确认路径、桌面图标可见性，并查看日志。",
-                7 => "原生 DLL 版本过旧：请运行 native/DesktopDrawProbe/build.ps1 重新生成并复制，再测试。仅生成主程序不会更新 DLL。",
-                10 => "隐藏目标的选择状态未能清除，实验已停止并请求恢复显示。请查看日志中的恢复结果。",
-                9 => "桌面正在重命名或拖动，请结束操作后重试；本次未隐藏。",
-                _ => $"绘制探针未通过（退出码 {process.ExitCode}）。详情已写入独立日志。",
-            };
-            VisibilityProbeStatus.Text += $"\n测试日志：{DesktopDrawProbe.LogPath}";
-        }
-        catch (Exception ex)
-        {
-            VisibilityProbeStatus.Text = $"测试失败：{ex.Message}";
-        }
-        finally { BtnVisibilityProbe.IsEnabled = true; BtnHideProbe.IsEnabled = true; }
-    }
-
     private void PullToggles()
     {
         _loading = true;
         TsUnifiedSurface.IsChecked = AppConfig.Current.DesktopUnifiedSurface;
         TsEnabled.IsChecked = AppConfig.Current.DesktopFencesEnabled;
         var selectedId = AppearanceBox.SelectedValue as string;
-        var choices = AppConfig.Current.DesktopBoxes.Select(b => new BoxChoice(b.Id, b.Name)).Prepend(new BoxChoice(AllBoxesId, "全部盒子")).ToArray();
+        var choices = AppConfig.Current.DesktopBoxes.Select(b => new BoxChoice(b.Id,
+            DesktopTabGroups.Members(AppConfig.Current.DesktopBoxes, b).Length > 1 ? $"分页 · {b.Name}" : b.Name))
+            .ToArray();
         if (AppearanceBox.ItemsSource is not BoxChoice[] oldChoices || !oldChoices.SequenceEqual(choices))
         {
             AppearanceBox.ItemsSource = choices;
@@ -147,8 +84,7 @@ public partial class DesktopFencesPage : Page
     }
 
     private DesktopBox[] AppearanceTargets => AppConfig.Current.DesktopBoxes
-        .Where(b => (AppearanceBox.SelectedValue as string) == AllBoxesId ||
-            b.Id == (AppearanceBox.SelectedValue as string)).ToArray();
+        .Where(b => b.Id == (AppearanceBox.SelectedValue as string)).ToArray();
     private DesktopBox? SelectedAppearanceBox => AppearanceTargets.FirstOrDefault();
 
     private void ChangeAppearance(Func<DesktopBox, bool> needsChange, Action<DesktopBox> change)
@@ -168,17 +104,7 @@ public partial class DesktopFencesPage : Page
     private void RefreshAppearanceOptions()
     {
         var box = SelectedAppearanceBox;
-        var targets = AppearanceTargets;
-        var mixed = new List<string>();
-        if (targets.Select(b => b.Transparency).Distinct().Skip(1).Any()) mixed.Add("透明度");
-        if (targets.Select(b => (b.BgColorHex ?? "303034").TrimStart('#').ToUpperInvariant()).Distinct().Skip(1).Any()) mixed.Add("颜色");
-        if (targets.Select(b => b.BackgroundBlur > 0).Distinct().Skip(1).Any()) mixed.Add("模糊");
-        if (targets.Select(b => b.ShowBorder).Distinct().Skip(1).Any()) mixed.Add("边框");
-        if (targets.Select(b => b.RoundedCorners).Distinct().Skip(1).Any()) mixed.Add("圆角");
-        AppearanceScopeHint.Text = AppearanceBox.SelectedValue as string == AllBoxesId && box is not null
-            ? $"将调整现有的 {targets.Length} 个盒子，每次只统一修改的项目。"
-                + (mixed.Count > 0 ? $"以下项目不一致：{string.Join("、", mixed)}。控件暂显示第一个盒子的值。" : "")
-            : "";
+        AppearanceScopeHint.Text = "";
         AppearanceEmpty.Visibility = box is null ? Visibility.Visible : Visibility.Collapsed;
         AppearanceOptions.IsEnabled = box is not null;
         if (box is null)
@@ -408,13 +334,4 @@ public partial class DesktopFencesPage : Page
         App.DesktopFences.AddFolderBox(dlg.FolderName);
     }
 
-    private void BtnList_Click(object sender, RoutedEventArgs e)
-    {
-        var items = DesktopItems.Enumerate();
-        var sb = new StringBuilder();
-        sb.AppendLine($"共 {items.Count} 个桌面项：");
-        foreach (var it in items)
-            sb.AppendLine($"  {(it.Icon is null ? "·" : "▣")}  {it.Name}");
-        Output.Text = sb.ToString();
-    }
 }

@@ -26,7 +26,7 @@ namespace MagiDesk.Features.DesktopFences;
 /// persist. WPF-UI applies a Mica backdrop to every window, which would replace
 /// the see-through wallpaper with opaque material — we disable that per window.
 /// </summary>
-internal sealed class FenceBoxWindow : Window
+internal sealed partial class FenceBoxWindow : Window
 {
     // Grid tiles fit 4-across for the fixed box width (see BoxWidth).
     // Explorer reports pixels; WPF Width/Height are DIPs. Do not scale the
@@ -56,7 +56,7 @@ internal sealed class FenceBoxWindow : Window
     private static readonly string GlyphBack = ((char)0xE72B).ToString(); // Back arrow
     private static readonly Color DefaultBg = Color.FromRgb(0x30, 0x30, 0x34);
 
-    private readonly DesktopBox _box;
+    private DesktopBox _box;
     private CornerRadius ItemCornerRadius => new(!_desktopSurface && _box.RoundedCorners ? 4 : 0);
     private readonly DesktopFenceService _service;
     private readonly bool _desktopSurface;
@@ -98,6 +98,7 @@ internal sealed class FenceBoxWindow : Window
     private static readonly SolidColorBrush HoverBrush = Frozen(Color.FromArgb(0x20, 0xFF, 0xFF, 0xFF));
     private static readonly SolidColorBrush SelBrush   = Frozen(Color.FromArgb(0x48, 0xFF, 0xFF, 0xFF));
     private static readonly System.Windows.Media.Effects.DropShadowEffect DesktopLabelShadow = CreateDesktopLabelShadow();
+    private bool UseDesktopLabelShadow => _desktopSurface && !MagiDesk.Infrastructure.DesktopRenderExperiment.DisableDesktopLabelShadow;
     private static System.Windows.Media.Effects.DropShadowEffect CreateDesktopLabelShadow()
     {
         var shadow = new System.Windows.Media.Effects.DropShadowEffect
@@ -116,6 +117,16 @@ internal sealed class FenceBoxWindow : Window
         : Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
 
     private bool _dragging;
+    protected override Size MeasureOverride(Size availableSize)
+    {
+        using var trace = MagiDesk.Infrastructure.StartupTrace.MeasureSlow("window.measure");
+        return base.MeasureOverride(availableSize);
+    }
+    protected override Size ArrangeOverride(Size finalSize)
+    {
+        using var trace = MagiDesk.Infrastructure.StartupTrace.MeasureSlow("window.arrange");
+        return base.ArrangeOverride(finalSize);
+    }
     private bool _resizing;
     private NativeMethods.POINT _lastCursor;
     private double _rawLeft, _rawTop, _scaleX = 1, _scaleY = 1;
@@ -126,10 +137,11 @@ internal sealed class FenceBoxWindow : Window
     private Edges _resizeEdges;
     private double _curL, _curT, _curR, _curB;
 
-    public FenceBoxWindow(DesktopBox box, DesktopFenceService service, bool desktopSurface = false)
+    public FenceBoxWindow(DesktopBox box, DesktopFenceService service, bool desktopSurface = false, DesktopMonitor? desktopMonitor = null)
     {
         _box = box; _service = service;
         _desktopSurface = desktopSurface;
+        _desktopMonitor = desktopMonitor;
         if (desktopSurface) _compositionFrame = false;
 
 
@@ -193,6 +205,7 @@ internal sealed class FenceBoxWindow : Window
             HorizontalAlignment = HorizontalAlignment.Center, MaxWidth = 0,
         };
         var titleArea = new Border { Background = System.Windows.Media.Brushes.Transparent, Padding = new Thickness(6, 0, 6, 0), Child = _title };
+        InstallTabHeader(titleArea);
         titleArea.MouseLeftButtonDown += TitleMouseDown;
         titleArea.MouseMove           += TitleMouseMove;
         titleArea.MouseLeftButtonUp   += TitleMouseUp;
@@ -221,6 +234,7 @@ internal sealed class FenceBoxWindow : Window
             double backWidth = _backBtn.Visibility == Visibility.Visible ? _backBtn.Width : 0;
             double side = Math.Max(menuBtn.Width + _layoutButton.Width + backWidth, chevronBtn.Width) + 6;
             _title.MaxWidth = Math.Max(0, bar.ActualWidth - side * 2);
+            if (_tabStrip is not null) _tabStrip.MaxWidth = _title.MaxWidth;
         }
         bar.SizeChanged += (_, _) => UpdateTitleWidth();
         _backBtn.IsVisibleChanged += (_, _) => UpdateTitleWidth();
@@ -235,7 +249,7 @@ internal sealed class FenceBoxWindow : Window
             HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
             VerticalContentAlignment = VerticalAlignment.Top,
             HorizontalContentAlignment = HorizontalAlignment.Left,
-            Padding = new Thickness(8, 0, 8, 10),
+            Padding = new Thickness(6, 0, 6, 6),
             Background = System.Windows.Media.Brushes.Transparent,
         };
         _scroller.ScrollChanged += (_, _) => UpdateViewport();
@@ -251,7 +265,9 @@ internal sealed class FenceBoxWindow : Window
         // resize border). Left/right/bottom edges + bottom corners resize with
         // edge-snapping; the top edge is the title bar (used for moving). Handles
         // are invisible but hit-testable; a small triangle marks the corner.
-        const double Edge = 6, Corner = 14;
+        // Keep resizing on the outer rim so more of the inner blank area
+        // remains available for starting a marquee selection.
+        const double Edge = 3, Corner = 10;
         _resizeLayer = new Grid();
         _resizeLayer.Children.Add(MakeResizeHandle(Edges.Left,   Cursors.SizeWE, HorizontalAlignment.Left,    VerticalAlignment.Stretch, Edge, null));
         _resizeLayer.Children.Add(MakeResizeHandle(Edges.Right,  Cursors.SizeWE, HorizontalAlignment.Right,   VerticalAlignment.Stretch, Edge, null));
@@ -357,6 +373,13 @@ internal sealed class FenceBoxWindow : Window
 
     private DragDropEffects FileDropEffect(DragEventArgs e)
     {
+        if (IsTabHeaderDrop(e)) return DragDropEffects.None;
+        var target = FindTileItem(InputHitTest(e.GetPosition(this)) as DependencyObject);
+        if (RecycleBinDrop.IsTarget(target?.Path))
+            return RecycleBinDrop.Effect(e.Data.GetData(DataFormats.FileDrop) as string[], e.AllowedEffects, e.KeyStates);
+        if (ReadDesktopDrag(e) is { } desktopDrag)
+            return _desktopAutoArrange && desktopDrag.MonitorId == _desktopMonitor?.Id
+                ? DragDropEffects.None : e.AllowedEffects & DragDropEffects.Move;
         if (FindTileItem(InputHitTest(e.GetPosition(this)) as DependencyObject)?.IsShellItem == true)
             return DragDropEffects.None; // Never treat dropping on Recycle Bin as a desktop copy.
         if (!e.Data.GetDataPresent(DataFormats.FileDrop)) return DragDropEffects.None;
@@ -397,12 +420,35 @@ internal sealed class FenceBoxWindow : Window
         {
             var effect = FileDropEffect(e);
             if (effect == DragDropEffects.None) return;
+            if (RecycleBinDrop.IsTarget(FindTileItem(InputHitTest(e.GetPosition(this)) as DependencyObject)?.Path))
+            {
+                try
+                {
+                    if (e.Data.GetData(DataFormats.FileDrop) is string[] recyclePaths
+                        && RecycleBinDrop.Execute(recyclePaths, paths => ShellOps.Recycle(paths, Hwnd)))
+                        e.Effects = DragDropEffects.Move;
+                }
+                finally
+                {
+                    ThumbnailLoader.Invalidate(RecycleBinDrop.PathId);
+                    Relayout();
+                    _service.RefreshBoxes();
+                }
+                return;
+            }
+            if (ReadDesktopDrag(e) is { } drag)
+            {
+                MoveDesktopIcons(drag, e.GetPosition(_itemsCanvas!));
+                e.Effects = DragDropEffects.Move;
+                return;
+            }
             if (e.Data.GetData(DataFormats.FileDrop) is not string[] files) return;
             var paths = files.Where(p => File.Exists(p) || Directory.Exists(p))
                 .Select(Path.GetFullPath).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
             if (paths.Length == 0 || OpFolder is not { } destination) return;
             if (!IsFolderBox && e.Data.GetDataPresent(DragFormat))
             {
+                if (_desktopSurface) PlaceDroppedDesktopIcons(paths, e.GetPosition(_itemsCanvas!));
                 _service.AssignItems(paths, _box.Id);
                 e.Effects = effect;
                 return;
@@ -422,7 +468,11 @@ internal sealed class FenceBoxWindow : Window
                 return;
             }
             if (!IsFolderBox)
-                _service.AssignItems(paths.Select(p => SameDirectory(p) ? p : Path.Combine(destination, Path.GetFileName(p))), _box.Id);
+            {
+                var targets = paths.Select(p => SameDirectory(p) ? p : Path.Combine(destination, Path.GetFileName(p))).ToArray();
+                if (_desktopSurface) PlaceDroppedDesktopIcons(targets, e.GetPosition(_itemsCanvas!));
+                _service.AssignItems(targets, _box.Id);
+            }
             else RefreshAfterOp();
             e.Effects = effect;
         }
@@ -447,6 +497,9 @@ internal sealed class FenceBoxWindow : Window
     protected override void OnSourceInitialized(EventArgs e)
     {
         base.OnSourceInitialized(e);
+        var traceDpi = VisualTreeHelper.GetDpi(this);
+        MagiDesk.Infrastructure.StartupTrace.Mark("window.render-state",
+            $"surface={_desktopSurface} transparent={AllowsTransparency} widthDip={Width:F0} heightDip={Height:F0} dpi={traceDpi.DpiScaleX:F2},{traceDpi.DpiScaleY:F2} shadow={UseDesktopLabelShadow} renderMode={HwndSource.FromHwnd(Hwnd)?.CompositionTarget?.RenderMode}");
         // Place in PHYSICAL pixels — WPF's Left/Top are DIP interpreted against
         // the PRIMARY monitor's DPI, which lands the box in the wrong spot (and
         // drifts across restarts) on a multi-monitor / mixed-DPI setup.
@@ -456,8 +509,8 @@ internal sealed class FenceBoxWindow : Window
             SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
         if (_desktopSurface)
         {
-            var area = System.Windows.Forms.Screen.PrimaryScreen!.WorkingArea;
-            NativeMethods.SetWindowPos(hwnd, IntPtr.Zero, area.X, area.Y, area.Width, area.Height,
+            var area = _desktopMonitor?.WorkArea ?? new Rect(0, 0, Width, Height);
+            NativeMethods.SetWindowPos(hwnd, IntPtr.Zero, (int)area.X, (int)area.Y, (int)area.Width, (int)area.Height,
                 SWP_NOZORDER | SWP_NOACTIVATE);
         }
         DisableBackdrop();
@@ -472,6 +525,9 @@ internal sealed class FenceBoxWindow : Window
     {
         switch (msg)
         {
+            case 0x007E: // WM_DISPLAYCHANGE
+                QueueDesktopWorkArea();
+                break;
             case 0x0005: // WM_SIZE: WindowChrome can restore its own frame margins.
             case 0x007D: // WM_STYLECHANGED
                 if (_compositionFrame && !_applyingBackgroundBlur && !_frameRefreshQueued)
@@ -490,6 +546,7 @@ internal sealed class FenceBoxWindow : Window
                 if (!_peeking) DesktopWindowLayer.ConstrainPosition(lParam, _desktopLayerPlaced && !_changingDesktopOrder);
                 break;
             case 0x001A: case 0x031A: case 0x031E:
+                if (msg == 0x001A) QueueDesktopWorkArea();
                 _lastBlurRequest = null; // Settings/theme/compositor changes can invalidate the effect.
                 DisableBackdrop();
                 break;
@@ -502,6 +559,7 @@ internal sealed class FenceBoxWindow : Window
 
     private void DisableBackdrop()
     {
+        using var trace = MagiDesk.Infrastructure.StartupTrace.MeasureSlow("window.backdrop-check");
         if (_applyingBackgroundBlur) return;
         var h = new WindowInteropHelper(this).Handle;
         if (h == IntPtr.Zero) return;
@@ -520,16 +578,24 @@ internal sealed class FenceBoxWindow : Window
     }
 
     private bool _applyingBackgroundBlur;
+    private static readonly Brush DesktopSurfaceBackground = Frozen(Color.FromArgb(1, 0, 0, 0));
+    internal static void SetDesktopSurfaceBackground(Border root)
+    {
+        // A fresh Brush invalidates the full-screen transparent surface on each
+        // activation, position notification and 100 ms startup backdrop check.
+        if (!ReferenceEquals(root.Background, DesktopSurfaceBackground)) root.Background = DesktopSurfaceBackground;
+    }
     private bool _frameRefreshQueued;
     private string? _lastBlurStatus;
     private (IntPtr Handle, int Mode, Color Tint, bool Rounded)? _lastBlurRequest;
 
     private void ApplyBackgroundBlur(IntPtr handle)
     {
+        using var trace = MagiDesk.Infrastructure.StartupTrace.MeasureSlow("window.blur-apply");
         if (_desktopSurface)
         {
             // A tiny alpha keeps empty space hit-testable for marquee/drop.
-            _root.Background = Frozen(Color.FromArgb(1, 0, 0, 0));
+            SetDesktopSurfaceBackground(_root);
             return;
         }
         if (_applyingBackgroundBlur) return;
@@ -599,12 +665,14 @@ internal sealed class FenceBoxWindow : Window
     /// <summary>Render a normal (item) box from the items the service resolved.</summary>
     public void Render(IReadOnlyList<DesktopItem> items)
     {
+        RefreshTabHeaders();
         _rootItems = items;
         if (_currentPath is not null) { RefreshFolder(); return; }
         _refreshVersion.Next();
         UpdateBackButton();
         _title.Text = $"{_box.Name}   ·   {items.Count}";
         RenderItems(items);
+        if (_desktopSurface) ApplyDesktopDropSelection();
     }
 
     /// <summary>Render a folder-mapped box from its current folder's contents.
@@ -612,15 +680,31 @@ internal sealed class FenceBoxWindow : Window
     /// a generation counter drops results superseded by a newer navigation/refresh
     /// so rapid clicks don't render stale folders.</summary>
     private string? _displayedFolder;
+    internal void RefreshRecoveredFolder()
+    {
+        _watcher?.Dispose(); _watcher = null; _watchedPath = null;
+        RefreshFolder();
+    }
     public void RefreshFolder()
     {
+        RefreshTabHeaders();
         if (_closed || _currentPath is null) return;
         UpdateBackButton();
         var path = _currentPath;
         EnsureWatching(path);
         bool atRoot = PathEq(path, _box.FolderPath);
+        string? mappedRoot = _box.FolderPath, rootIdentity = _box.FolderIdentity;
         long gen = _refreshVersion.Next();
-        Task.Run(() => DesktopItems.EnumerateFolder(path)).ContinueWith(t =>
+        long queued = System.Diagnostics.Stopwatch.GetTimestamp();
+        Task.Run(() =>
+        {
+            MagiDesk.Infrastructure.StartupTrace.Mark("folder.worker", $"generation={gen} queueMs={System.Diagnostics.Stopwatch.GetElapsedTime(queued).TotalMilliseconds:F0}");
+            using var trace = MagiDesk.Infrastructure.StartupTrace.Measure("folder.enumeration", $"folder={MagiDesk.Infrastructure.StartupTrace.Key(path)} generation={gen}");
+            var items = rootIdentity is not null && mappedRoot is not null
+                && MagiDesk.Native.DesktopFileIdentity.Read(mappedRoot) != rootIdentity
+                    ? (IReadOnlyList<DesktopItem>)Array.Empty<DesktopItem>() : DesktopItems.EnumerateFolder(path);
+            return (Items: items, Ready: System.Diagnostics.Stopwatch.GetTimestamp());
+        }).ContinueWith(t =>
         {
             if (t.IsFaulted)
             {
@@ -629,17 +713,20 @@ internal sealed class FenceBoxWindow : Window
                 return;
             }
             if (t.IsCanceled) return;
-            if (_closed || !_refreshVersion.IsCurrent(gen) || _currentPath != path) return;   // superseded
-            var items = t.Result;
+            if (_closed || !_refreshVersion.IsCurrent(gen) || _currentPath != path)
+            { MagiDesk.Infrastructure.StartupTrace.Mark("folder.discarded", $"generation={gen}"); return; }
+            MagiDesk.Infrastructure.StartupTrace.Mark("folder.ui-ready", $"generation={gen} count={t.Result.Items.Count} waitMs={System.Diagnostics.Stopwatch.GetElapsedTime(t.Result.Ready).TotalMilliseconds:F0}");
+            var items = atRoot ? BoxClassification.Filter(_box, _service.Boxes, t.Result.Items, DateTime.UtcNow) : t.Result.Items;
             _title.Text = (atRoot ? _box.Name : SafeName(path)) + $"   ·   {items.Count}";
             UpdateBackButton();
             RenderItems(items);
+            _service.ContentLoaded();
             if (!PathEq(_displayedFolder, path))
             {
                 _displayedFolder = path;
                 if (_nameEditor is null) _scroller.ScrollToTop();
             }
-        }, CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.FromCurrentSynchronizationContext());
+        }, CancellationToken.None, TaskContinuationOptions.None, new MagiDesk.Infrastructure.ContentTaskScheduler(Dispatcher));
     }
 
     /// <summary>Point the folder watcher at <paramref name="path"/> (the box's
@@ -694,6 +781,8 @@ internal sealed class FenceBoxWindow : Window
 
     private void RenderItems(IReadOnlyList<DesktopItem> items, bool force = false)
     {
+        using var trace = MagiDesk.Infrastructure.StartupTrace.Measure("items.render-ui", $"count={items.Count} surface={_desktopSurface}");
+        var renderWatch = System.Diagnostics.Stopwatch.StartNew();
         // Watcher/enumeration results must not replace an active inline editor.
         if (_nameEditor is not null)
         {
@@ -709,12 +798,11 @@ internal sealed class FenceBoxWindow : Window
             return;
         }
         _lastItems = items;
-        // A small sample prepares common types before the first right-click.
-        // Hover requests cover other types without walking the whole folder.
-        foreach (var sample in items.Take(4)) ShellContextMenu.RequestPrewarm(sample.Path, sample.IsFolder);
+        // Hover still prewarms each type. Do not load third-party menu DLLs
+        // for every box while its first icon requests are being queued.
         ApplyAppearance();
         var sorted = DesktopItems.Sort(items, _desktopSurface ? _desktopSort : _box.Sort,
-            _desktopSurface ? _desktopSortDescending : _box.SortDescending);
+            _desktopSurface ? _desktopSortDescending : _box.SortDescending, shellTypes: _desktopSurface);
         _order = sorted.Select(i => i.Path).ToList();
         _selected.IntersectWith(_order);   // drop selections for items no longer present
         var tileMap = _tileByPath;
@@ -724,26 +812,44 @@ internal sealed class FenceBoxWindow : Window
         });
         bool list = !_desktopSurface && _box.Layout == BoxLayout.List;
         bool labels = _desktopSurface || _box.ShowLabels;
-        _itemsCanvas.SetItems(sorted.Count,
+        var renderedDpi = VisualTreeHelper.GetDpi(this);
+        _lastRenderedDpi = renderedDpi;
+        _itemsCanvas.SetItemsPreserving(sorted.Cast<object>().ToArray(),
+            (list, labels, IconPx, IconWiconOnly, IconHiconOnly, renderedDpi.DpiScaleX, renderedDpi.DpiScaleY),
             list ? 0 : labels ? TileW + 4 : TileWiconOnly + 2,
             list ? 32 : labels ? TileH + 4 : TileHiconOnly + 2,
             index => list ? BuildListRow(sorted[index], labels) : BuildGridTile(sorted[index], labels));
         _itemsCanvas.ItemGap = list ? 2 : 4;
         _itemsCanvas.DistributeHorizontalSpace = !list && !_desktopSurface;
         _itemsCanvas.ColumnFirst = _desktopSurface;
+        _desktopLayoutDirty = true;
         _itemsCanvas.FitItemHeight = !list;
         _itemsCanvas.Visibility = !_desktopSurface || _desktopShowIcons ? Visibility.Visible : Visibility.Hidden;
         _scroller.Content = _itemsCanvas;
         UpdateViewport();
+        UpdateSelectionVisuals();
         ScheduleNewItemRename();
+        if (renderWatch.ElapsedMilliseconds >= 30)
+            MagiDesk.Infrastructure.DiagnosticLog.Write($"DESKTOP-LOAD layout count={items.Count} ms={renderWatch.ElapsedMilliseconds} surface={_desktopSurface}\n");
 
     }
 
     private void UpdateViewport()
     {
+        using var trace = MagiDesk.Infrastructure.StartupTrace.MeasureSlow("items.viewport");
+        ConfigureDesktopPositions();
         if (!_closed) _itemsCanvas?.UpdateViewport(_scroller.ViewportWidth,
             _scroller.Visibility == Visibility.Visible ? _scroller.ViewportHeight : 0,
             _scroller.VerticalOffset);
+        TraceVisibleTiles();
+    }
+
+    private int _lastTraceRealized = -1;
+    private void TraceVisibleTiles()
+    {
+        if (!MagiDesk.Infrastructure.StartupTrace.Enabled || _itemsCanvas is null || _lastTraceRealized == _itemsCanvas.RealizedCount) return;
+        _lastTraceRealized = _itemsCanvas.RealizedCount;
+        MagiDesk.Infrastructure.StartupTrace.Mark("window.visible-tiles", $"surface={_desktopSurface} realized={_lastTraceRealized} total={_lastItems?.Count ?? 0} shadowLabels={(UseDesktopLabelShadow ? _lastTraceRealized : 0)}");
     }
 
     public void RefreshAppearance() => ApplyAppearance();
@@ -784,10 +890,16 @@ internal sealed class FenceBoxWindow : Window
     {
         if (!_desktopSurface || _closed) return;
         bool changed = _desktopIconSize != settings.IconSize || _desktopShowIcons != settings.ShowIcons
+            || _desktopAutoArrange != settings.AutoArrange || _desktopSnapToGrid != settings.SnapToGrid
             || (settings.Sort is { } sort && (_desktopSort != sort || _desktopSortDescending != settings.Descending));
         if (changed) _commitRename?.Invoke();
+        if (!_desktopAutoArrange && !settings.AutoArrange && settings.Sort is { } newSort
+            && (_desktopSort != newSort || _desktopSortDescending != settings.Descending))
+            _desktopResetOrder = true;
         _desktopIconSize = settings.IconSize;
         _desktopShowIcons = settings.ShowIcons;
+        _desktopAutoArrange = settings.AutoArrange;
+        _desktopSnapToGrid = settings.SnapToGrid;
         if (settings.Sort is { } value) { _desktopSort = value; _desktopSortDescending = settings.Descending; }
         // Keep the transparent window for the desktop menu when icons are hidden.
         if (!settings.ShowIcons) _commitRename?.Invoke();
@@ -835,6 +947,7 @@ internal sealed class FenceBoxWindow : Window
 
     private void RefreshRootItems()
     {
+        if (_desktopSurface) { _service.RefreshBoxes(); return; }
         // Returning to this box must not rebuild every other box. Refresh its
         // cached root only, and discard results if navigation changes meanwhile.
         long version = _refreshVersion.Next();
@@ -861,6 +974,7 @@ internal sealed class FenceBoxWindow : Window
 
     internal void RemapNavigation(Func<string, string> remap)
     {
+        RemapCachedPages(remap);
         if (_currentPath is not null) _currentPath = remap(_currentPath);
         foreach (var history in new[] { _navigationHistory, _forwardHistory })
         {
@@ -880,6 +994,7 @@ internal sealed class FenceBoxWindow : Window
 
     private void ApplyAppearance()
     {
+        using var trace = MagiDesk.Infrastructure.StartupTrace.MeasureSlow("window.appearance");
         foreach (var tile in _tileByPath.Values) tile.CornerRadius = ItemCornerRadius;
         if (_desktopSurface)
         {
@@ -927,6 +1042,7 @@ internal sealed class FenceBoxWindow : Window
         _closed = true;
         _refreshVersion.Next();
         _itemsCanvas?.ClearItems();
+        _pageViews.Clear();
 
 
         _saveTimer.Stop();
@@ -1134,15 +1250,21 @@ internal sealed class FenceBoxWindow : Window
 
     // ------------------------------------------------------------ tiles
 
+    private readonly Dictionary<Image, Action> _shellIconReloaders = new();
+    internal void RefreshShellThumbnails()
+    {
+        foreach (var reload in _shellIconReloaders.Values.ToArray()) reload();
+    }
+
     private void LoadThumbnailWhenVisible(Image image, string path)
     {
         RenderOptions.SetBitmapScalingMode(image, BitmapScalingMode.HighQuality);
         image.UseLayoutRounding = true;
         image.SnapsToDevicePixels = true;
         CancellationTokenSource? subscription = null;
-        image.Loaded += (_, _) =>
+        void Reload()
         {
-            subscription?.Cancel(); subscription?.Dispose();
+            _ = MagiDesk.Infrastructure.CancellationLifetime.CancelAndDisposeAsync(subscription);
             subscription = new CancellationTokenSource();
             var dpi = VisualTreeHelper.GetDpi(image);
             int pixels = ThumbnailLoader.PhysicalSize(image.Width, image.Height, dpi.DpiScaleX, dpi.DpiScaleY);
@@ -1153,10 +1275,16 @@ internal sealed class FenceBoxWindow : Window
                     && src is System.Windows.Media.Imaging.BitmapSource bitmap)
                     MagiDesk.Infrastructure.DiagnosticLog.Write($"DESKTOP-ICON nativePx={_desktopIconSize} dip={image.Width:F2} dpi={dpi.DpiScaleX:F2} requestedPx={pixels} bitmap={bitmap.PixelWidth}x{bitmap.PixelHeight}\n");
             }, subscription.Token, pixels);
+        }
+        image.Loaded += (_, _) =>
+        {
+            if (_desktopSurface && DesktopItems.IsShellPath(path)) _shellIconReloaders[image] = Reload;
+            Reload();
         };
         image.Unloaded += (_, _) =>
         {
-            subscription?.Cancel(); subscription?.Dispose(); subscription = null;
+            _shellIconReloaders.Remove(image);
+            _ = MagiDesk.Infrastructure.CancellationLifetime.CancelAndDisposeAsync(subscription); subscription = null;
         };
     }
 
@@ -1182,7 +1310,7 @@ internal sealed class FenceBoxWindow : Window
             stack.Children.Add(new TextBlock
             {
                 Text = item.Name, Foreground = System.Windows.Media.Brushes.White, FontSize = 11,
-                Effect = _desktopSurface ? DesktopLabelShadow : null,
+                Effect = UseDesktopLabelShadow ? DesktopLabelShadow : null,
                 TextAlignment = TextAlignment.Center, TextWrapping = TextWrapping.Wrap,
                 TextTrimming = TextTrimming.CharacterEllipsis, MaxHeight = 32, Width = TileW - 4,
                 LineHeight = 16, LineStackingStrategy = LineStackingStrategy.BlockLineHeight,
@@ -1281,11 +1409,25 @@ internal sealed class FenceBoxWindow : Window
                 ? _selected.ToArray() : new[] { item.Path };
             // Namespace icons are not CF_HDROP filesystem paths. Never silently
             // perform a partial drag of a mixed selection.
-            if (paths.Any(DesktopItems.IsShellPath)) return;
+            bool shellSelection = paths.Any(DesktopItems.IsShellPath);
+            if (shellSelection && !_desktopSurface) return;
             var data = new DataObject();
-            data.SetData(DataFormats.FileDrop, paths);
-            if (!IsFolderBox) data.SetData(DragFormat, item.Path);
-            DragDrop.DoDragDrop(tile, data, DragDropEffects.Copy | DragDropEffects.Move);
+            if (!shellSelection)
+            {
+                data.SetData(DataFormats.FileDrop, paths);
+                if (!IsFolderBox) data.SetData(DragFormat, item.Path);
+            }
+            if (_desktopSurface && _itemsCanvas is not null)
+            {
+                var dpi = VisualTreeHelper.GetDpi(this);
+                Point Physical(Point value) => new(value.X * dpi.DpiScaleX, value.Y * dpi.DpiScaleY);
+                _service.ActiveDesktopDrag = new DesktopIconDrag(_desktopMonitor!.Id, paths,
+                    Physical(_itemsCanvas.PointFromScreen(PointToScreen(start))), paths.Select(path => Physical(DesktopPoint(path))).ToArray());
+                _service.DesktopDragToken = Guid.NewGuid().ToString("N");
+                data.SetData(DesktopPositionDragFormat, _service.DesktopDragToken);
+            }
+            try { DragDrop.DoDragDrop(tile, data, DragDropEffects.Copy | DragDropEffects.Move); }
+            finally { _service.ActiveDesktopDrag = null; _service.DesktopDragToken = null; }
         };
         tile.PreviewMouseLeftButtonUp += (_, _) =>
         {
@@ -1310,6 +1452,7 @@ internal sealed class FenceBoxWindow : Window
     // ------------------------------------------------------------ selection
 
     private DispatcherTimer? _renameTimer;
+    private bool _marqueeSelection;
     private void WireMarquee(Canvas layer)
     {
         var rectangle = new System.Windows.Shapes.Rectangle
@@ -1321,6 +1464,7 @@ internal sealed class FenceBoxWindow : Window
         Point start = default;
         bool selecting = false, ctrl = false, additive = false;
         string[] before = [];
+        bool previousMarquee = false;
         void End()
         {
             selecting = false;
@@ -1336,6 +1480,9 @@ internal sealed class FenceBoxWindow : Window
             _commitRename?.Invoke(); _renameTimer?.Stop();
             start = e.GetPosition(_itemsCanvas);
             before = _selected.ToArray();
+            previousMarquee = _marqueeSelection;
+            _marqueeSelection = true;
+            UpdateSelectionVisuals();
             ctrl = Keyboard.Modifiers.HasFlag(ModifierKeys.Control);
             additive = ctrl || Keyboard.Modifiers.HasFlag(ModifierKeys.Shift);
             if (!additive) ClearSelection();
@@ -1374,17 +1521,26 @@ internal sealed class FenceBoxWindow : Window
         {
             if (selecting && e.Key == Key.Escape)
             {
-                _selected.Clear(); _selected.UnionWith(before); UpdateSelectionVisuals(); End(); e.Handled = true;
+                _marqueeSelection = previousMarquee; _selected.Clear(); _selected.UnionWith(before); UpdateSelectionVisuals(); End(); e.Handled = true;
             }
         };
     }
 
+    private DpiScale? _lastRenderedDpi;
+    private bool _dpiRelayoutQueued;
     protected override void OnDpiChanged(DpiScale oldDpi, DpiScale newDpi)
     {
         base.OnDpiChanged(oldDpi, newDpi);
+        if (_dpiRelayoutQueued) return;
+        _dpiRelayoutQueued = true;
         Dispatcher.BeginInvoke(new Action(() =>
         {
-            if (!_closed && _lastItems is not null) Relayout();
+            _dpiRelayoutQueued = false;
+            if (!_closed && _lastItems is not null && !Equals(_lastRenderedDpi, VisualTreeHelper.GetDpi(this)))
+            {
+                MagiDesk.Infrastructure.StartupTrace.Mark("items.dpi-rebuild");
+                Relayout();
+            }
         }), DispatcherPriority.Loaded);
     }
 
@@ -1528,21 +1684,23 @@ internal sealed class FenceBoxWindow : Window
         bool selected = _selected.Contains(path);
         tile.Background = TileBrush(path, hover: false);
         if (_box.Layout == BoxLayout.List) return;
-        Panel.SetZIndex(tile, selected ? 1 : 0);
+        bool expanded = selected && !_marqueeSelection;
+        Panel.SetZIndex(tile, expanded ? 1 : 0);
         if (tile.Child is Panel panel && panel.Children.OfType<TextBlock>().FirstOrDefault() is { } label)
         {
-            label.MaxHeight = selected ? double.PositiveInfinity : 32;
-            label.TextTrimming = selected ? TextTrimming.None : TextTrimming.CharacterEllipsis;
+            label.MaxHeight = expanded ? double.PositiveInfinity : 32;
+            label.TextTrimming = expanded ? TextTrimming.None : TextTrimming.CharacterEllipsis;
         }
     }
 
-    private void SelectOnly(string path)   { _keyboardCursor = path; _selected.Clear(); _selected.Add(path); _anchor = path; UpdateSelectionVisuals(); }
-    private void ToggleSelect(string path) { if (!_selected.Remove(path)) _selected.Add(path); _anchor = path; UpdateSelectionVisuals(); }
+    private void SelectOnly(string path)   { _marqueeSelection = false; _keyboardCursor = path; _selected.Clear(); _selected.Add(path); _anchor = path; UpdateSelectionVisuals(); }
+    private void ToggleSelect(string path) { _marqueeSelection = false; if (!_selected.Remove(path)) _selected.Add(path); _anchor = path; UpdateSelectionVisuals(); }
     private void ClearSelection()          { if (_selected.Count == 0) return; _selected.Clear(); UpdateSelectionVisuals(); }
     private void SelectAll()               { _selected.Clear(); foreach (var p in _order) _selected.Add(p); UpdateSelectionVisuals(); }
 
     private void RangeSelectTo(string path)
     {
+        _marqueeSelection = false;
         if (_anchor is null) { SelectOnly(path); return; }
         int a = _order.IndexOf(_anchor), b = _order.IndexOf(path);
         if (a < 0 || b < 0) { SelectOnly(path); return; }
@@ -1617,8 +1775,9 @@ internal sealed class FenceBoxWindow : Window
         ClearSelection();
         var folder = OpFolder;
         if (folder is null) return;
-        EnsureWatching(folder); // Shell commands may finish after InvokeCommand returns.
+        if (!_desktopSurface) EnsureWatching(folder); // Desktop watchers are shared by the service.
         bool assignCreated = !IsFolderBox && !_box.IsUnsorted;
+        string originatingPageId = _box.Id;
         ShellContextMenu.ShowBackground(Hwnd, folder, (int)screenPoint.X, (int)screenPoint.Y, () =>
         {
             if (!_closed) RefreshCurrentView();
@@ -1629,9 +1788,11 @@ internal sealed class FenceBoxWindow : Window
             Dispatcher.BeginInvoke(new Action(() =>
             {
                 if (!ShellNewItemSite.IsDirectChild(folder, path)) return;
-                if (!_closed && string.Equals(OpFolder, folder, StringComparison.OrdinalIgnoreCase))
+                if (!_closed && _box.Id == originatingPageId && string.Equals(OpFolder, folder, StringComparison.OrdinalIgnoreCase))
                 {
                     if (_nameEditor is not null && _selected.Count == 1 && _selected.Contains(path)) return;
+                    if (_desktopSurface && _itemsCanvas is not null)
+                        PlaceDroppedDesktopIcons([path], _itemsCanvas.PointFromScreen(screenPoint), redistribute: false);
                     _newItemToRename = path;
                     // The Shell callback identifies the created item. Materialize
                     // it now rather than waiting for the directory watcher/render.
@@ -1641,16 +1802,17 @@ internal sealed class FenceBoxWindow : Window
                             Directory.Exists(path), 0, DateTime.UtcNow, DateTime.UtcNow));
                     RenderItems(current);
                 }
-                if (assignCreated) _service.AssignItem(path, _box.Id);
+                if (assignCreated) _service.AssignItem(path, originatingPageId);
                 else if (!_closed) RefreshCurrentView();
                 MagiDesk.Infrastructure.DiagnosticLog.Write($"FENCE-NEW attributed box={_box.Id} grouped={assignCreated}\n");
             }), DispatcherPriority.Send);
-        }, desktopSurface: _desktopSurface, onDesktopSettings: SyncDesktopMenuSettings);
+        }, desktopSurface: _desktopSurface, onDesktopSettings: SyncDesktopMenuSettings,
+            onDesktopSort: _service.ReorderDesktopSurfaces);
     }
 
     private void SyncDesktopMenuSettings(DesktopShellMenu.ViewSettings settings)
     {
-        ApplyDesktopSettings(settings);
+        _service.SyncDesktopSurfaceSettings(settings);
         _desktopSettingsTimer?.Stop();
         // Some Explorer commands complete after InvokeCommand returns. Bounded
         // follow-up reads only after a menu command, never an idle COM poll.
@@ -1661,7 +1823,7 @@ internal sealed class FenceBoxWindow : Window
         timer.Tick += (_, _) =>
         {
             if (_closed) { timer.Stop(); return; }
-            if (DesktopShellMenu.CaptureSettings() is { } current) ApplyDesktopSettings(current);
+            if (DesktopShellMenu.CaptureSettings() is { } current) _service.SyncDesktopSurfaceSettings(current);
             DesktopSurfaceLease.EnsureHidden();
             if (--remaining == 0) timer.Stop();
         };
@@ -1676,6 +1838,14 @@ internal sealed class FenceBoxWindow : Window
         if (e.Key == Key.Escape && _service.IsPeeking)
         {
             _service.DismissPeek(true);
+            e.Handled = true;
+            return;
+        }
+        if (e.Key == Key.Tab && Keyboard.Modifiers.HasFlag(ModifierKeys.Control) && !_desktopSurface)
+        {
+            var pages = _service.TabPages(_box);
+            int index = Array.FindIndex(pages, p => p.Id == _box.Id);
+            if (pages.Length > 1) _service.SwitchTab(pages[(index + (Keyboard.Modifiers.HasFlag(ModifierKeys.Shift) ? pages.Length - 1 : 1)) % pages.Length].Id);
             e.Handled = true;
             return;
         }
@@ -1761,7 +1931,8 @@ internal sealed class FenceBoxWindow : Window
             ? 1 : Math.Max(1, (int)(width / cellWidth));
         int current = _keyboardCursor is null ? -1 : _order.IndexOf(_keyboardCursor);
         if (current < 0) current = _order.FindIndex(_selected.Contains);
-        int next = _desktopSurface
+        int next = _desktopSurface && !_desktopAutoArrange && _desktopPoints.Length == _order.Count
+            ? DesktopIconLayout.Next(_desktopPoints, current, key) : _desktopSurface
             ? FenceKeyboardNavigation.NextColumnFirst(current, _order.Count, _itemsCanvas?.RowsPerColumn ?? 1, key)
             : FenceKeyboardNavigation.Next(current, _order.Count, columns, key);
         var path = _order[next];
@@ -1805,6 +1976,41 @@ internal sealed class FenceBoxWindow : Window
         menu.Items.Add(rename);
 
         var newBox = new MenuItem { Header = "新建盒子…" };
+        if (!_box.IsUnsorted)
+        {
+            var classify = new MenuItem { Header = _box.IsRuleCategory ? "重新整理…" : "按规则分类为分页…",
+                IsEnabled = BoxClassification.CanApply(_service.Boxes, _box) || BoxClassification.CanReorganize(_service.Boxes, _box),
+                ToolTip = "单页盒子或已有规则分类可用；只分类显示，不移动文件" };
+            classify.Click += (_, _) =>
+            {
+                if (!CommitTabEdit()) return;
+                var rules = BoxClassificationDialog.ShowRules(_box.Name, _box.IsRuleCategory ? BoxClassification.Rules(_service.Boxes, _box) : null);
+                if (rules is not null) _service.ClassifyBox(_box.Id, rules);
+            };
+            menu.Items.Add(classify);
+            if (BoxClassification.CanReorganize(_service.Boxes, _box))
+            {
+                var cancelClassification = new MenuItem { Header = "取消分类，恢复单页" };
+                cancelClassification.Click += (_, _) =>
+                {
+                    if (MessageBox.Show("将移除分类分页，把内容集中到一个盒子中。实际文件不会移动或删除。", "取消分类",
+                        MessageBoxButton.OKCancel, MessageBoxImage.Question) == MessageBoxResult.OK)
+                        _service.CancelClassification(_box.Id);
+                };
+                menu.Items.Add(cancelClassification);
+            }
+        }
+        if (!_box.IsUnsorted)
+        {
+            menu.Items.Add(TabCreationMenu());
+            if (_service.TabPages(_box).Length > 1)
+            {
+                var close = new MenuItem { Header = "关闭当前分页（保留文件）",
+                    IsEnabled = DesktopTabGroups.CanClose(_service.Boxes, _box) };
+                close.Click += (_, _) => _service.CloseTab(_box.Id);
+                menu.Items.Add(close);
+            }
+        }
         newBox.Click += (_, _) => { var n = TextPrompt.Show("新建盒子", "盒子名称：", "新盒子"); if (n is not null) _service.AddBox(n); };
         menu.Items.Add(newBox);
 
@@ -1819,7 +2025,7 @@ internal sealed class FenceBoxWindow : Window
         if (!_box.IsUnsorted)
         {
             menu.Items.Add(new Separator());
-            var del = new MenuItem { Header = "删除盒子（成员回到桌面盒子）" };
+            var del = new MenuItem { Header = "删除整个盒子（所有分页成员回到桌面）" };
             del.Click += (_, _) => _service.DeleteBox(_box.Id);
             menu.Items.Add(del);
         }

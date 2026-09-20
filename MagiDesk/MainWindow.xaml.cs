@@ -13,6 +13,7 @@ namespace MagiDesk
 {
     public partial class MainWindow : FluentWindow
     {
+        private Type _initialPage = typeof(WindowDragPage);
         public MainWindow()
         {
             InitializeComponent();
@@ -88,8 +89,9 @@ namespace MagiDesk
 
         private void OnLoaded(object sender, RoutedEventArgs e)
         {
+            using var trace = Infrastructure.StartupTrace.Measure("main.loaded");
             App.Tray?.HookMainWindow(this);
-            RootNavigation.Navigate(typeof(WindowDragPage));
+            RootNavigation.Navigate(_initialPage);
 
             // Track Windows light/dark switches at runtime. Initial theme is
             // already applied in App.OnStartup; this just keeps the window in
@@ -103,7 +105,8 @@ namespace MagiDesk
             Dispatcher.BeginInvoke(new Action(() =>
             {
                 ZeroInsetAll(RootNavigation);
-                DumpTree(RootNavigation);
+                // The full tree is noisy and expensive; reserve it for explicit diagnostics.
+                if (Infrastructure.DiagnosticLog.Verbose) DumpTree(RootNavigation);
             }), System.Windows.Threading.DispatcherPriority.Loaded);
         }
 

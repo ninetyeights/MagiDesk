@@ -68,6 +68,7 @@ namespace MagiDesk
         {
             if (e.Args.Length == 3 && e.Args[0] == DesktopSurfaceLease.Argument)
             {
+                Infrastructure.StartupTrace.Start(null, "desktop-guard");
                 ShutdownMode = ShutdownMode.OnExplicitShutdown;
                 Shutdown(DesktopSurfaceLease.RunGuard(e.Args[1], e.Args[2]));
                 return;
@@ -101,7 +102,10 @@ namespace MagiDesk
                 Shutdown();
                 return;
             }
-            Native.DesktopIconVisibilityProbe.RecoverPending();
+            Infrastructure.StartupTrace.Start(Dispatcher, "app");
+            using var startupTrace = Infrastructure.StartupTrace.Measure("app.startup");
+            using (Infrastructure.StartupTrace.Measure("app.recover-probe"))
+                Native.DesktopIconVisibilityProbe.RecoverPending();
             // Listen for the show-signal on a background wait; dispatches back
             // to the UI thread to raise the main window.
             ThreadPool.RegisterWaitForSingleObject(_showEvent, (_, _) =>
@@ -115,11 +119,11 @@ namespace MagiDesk
             // first frame paints light brushes on a Mica-dark backdrop and
             // titles render as dark-on-dark. SystemThemeWatcher in
             // MainWindow.OnLoaded keeps the two in sync afterwards.
-            ApplyCurrentSystemTheme();
+            using (Infrastructure.StartupTrace.Measure("app.theme")) ApplyCurrentSystemTheme();
 
-            base.OnStartup(e);
+            using (Infrastructure.StartupTrace.Measure("app.base-startup")) base.OnStartup(e);
 
-            // Hook callback runs on the UI thread — a Gen2 blocking collection
+            // A Gen2 blocking collection also pauses the dedicated hook thread and
             // would exceed LowLevelHooksTimeout and get us silently unhooked.
             GCSettings.LatencyMode = GCLatencyMode.SustainedLowLatency;
 
@@ -155,6 +159,7 @@ namespace MagiDesk
                 // desktop icons while enabled). Off unless the user opts in.
                 _desktopFences = new DesktopFenceService(Dispatcher);
                 _desktopFences.Start();
+                Infrastructure.StartupTrace.Mark("app.fences-scheduled");
 
                 // Quick Grid — hotkey-triggered ad-hoc rows×cols picker.
                 _quickGrid = new QuickGridService(Dispatcher);
@@ -162,12 +167,12 @@ namespace MagiDesk
 
                 // Browser badges — per-Chrome-profile floating indicators.
                 _browserBadges = new BrowserBadgeService(Dispatcher);
-                _browserBadges.Start();
+                using (Infrastructure.StartupTrace.Measure("app.browser-badges")) _browserBadges.Start();
 
                 // Profile dock — taskbar-like floating strip of Chrome profile
                 // avatars, click to launch or focus the profile's windows.
                 _profileDock = new ProfileDockService(Dispatcher);
-                _profileDock.Start();
+                using (Infrastructure.StartupTrace.Measure("app.dock")) _profileDock.Start();
 
                 // Tray icon + close-to-tray (MainWindow wires itself via its
                 // Loaded handler so we don't have to race Application.Activated).

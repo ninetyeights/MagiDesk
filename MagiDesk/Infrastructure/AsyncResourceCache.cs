@@ -10,6 +10,7 @@ internal sealed class AsyncResourceCache<T> where T : class
         public Task<T?> Work = null!;
         public int Readers;
         public bool Finished;
+        public readonly long QueuedAt = System.Diagnostics.Stopwatch.GetTimestamp();
     }
     private readonly object _sync = new();
     private readonly Dictionary<string, Entry> _pending = new(StringComparer.OrdinalIgnoreCase);
@@ -20,12 +21,14 @@ internal sealed class AsyncResourceCache<T> where T : class
     private readonly Func<T, long> _cost;
     private readonly long _budget;
     private readonly int _capacity;
+    private readonly string? _diagnosticName;
     private long _bytes;
 
     public AsyncResourceCache(Func<string, T?> load, Func<T, long> cost,
-        long budget = 32 * 1024 * 1024, int capacity = 512, int concurrency = 4)
+        long budget = 32 * 1024 * 1024, int capacity = 512, int concurrency = 4, string? diagnosticName = null)
     {
         _load = load; _cost = cost; _budget = budget; _capacity = capacity;
+        _diagnosticName = diagnosticName;
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(budget);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(capacity);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(concurrency);
@@ -71,13 +74,33 @@ internal sealed class AsyncResourceCache<T> where T : class
         }
     }
 
+    public bool TryGet(string key, out T? value)
+    {
+        lock (_sync)
+        {
+            if (_cache.TryGetValue(key, out var hit))
+            {
+                _lru.Remove(hit.Node); _lru.AddLast(hit.Node); value = hit.Value; return true;
+            }
+            value = null; return false;
+        }
+    }
+
     private async Task<T?> LoadAsync(string key, Entry entry)
     {
+        string? traceKey = _diagnosticName is not null && StartupTrace.Enabled ? StartupTrace.Key(key) : null;
+        if (traceKey is not null) StartupTrace.Mark(_diagnosticName + ".worker", $"key={traceKey} queueMs={System.Diagnostics.Stopwatch.GetElapsedTime(entry.QueuedAt).TotalMilliseconds:F0}");
         try
         {
+            long waitStart = System.Diagnostics.Stopwatch.GetTimestamp();
             await _gate.WaitAsync(entry.Stop.Token).ConfigureAwait(false);
+            if (traceKey is not null) StartupTrace.Mark(_diagnosticName + ".slot", $"key={traceKey} waitMs={System.Diagnostics.Stopwatch.GetElapsedTime(waitStart).TotalMilliseconds:F0}");
             T? value;
-            try { entry.Stop.Token.ThrowIfCancellationRequested(); value = _load(key); }
+            try
+            {
+                using var trace = traceKey is not null ? StartupTrace.Measure(_diagnosticName + ".load", $"key={traceKey}") : null;
+                entry.Stop.Token.ThrowIfCancellationRequested(); value = _load(key);
+            }
             finally { _gate.Release(); }
             lock (_sync)
             {

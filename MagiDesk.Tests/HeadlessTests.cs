@@ -64,6 +64,18 @@ internal static class HeadlessTests
             ("logging: sensitive records require explicit opt-in", () => LogPrivacy().GetAwaiter().GetResult()),
         };
         int failures = 0;
+        tests = tests.Concat(DesktopRecoveryTests.Cases()).ToArray();
+        tests = tests.Concat(DesktopMembershipTests.Cases()).ToArray();
+        tests = tests.Concat(DesktopLayoutTests.Cases()).ToArray();
+        tests = tests.Concat(DesktopMonitorTests.Cases()).ToArray();
+        tests = tests.Concat(RecycleBinDropTests.Cases()).ToArray();
+        tests = tests.Concat(DesktopTypeSortTests.Cases()).ToArray();
+        tests = tests.Concat(DesktopSortCommandTests.Cases()).ToArray();
+        tests = tests.Concat(DesktopLiveRecoveryTests.Cases()).ToArray();
+        tests = tests.Concat(DesktopTabGroupTests.Cases()).ToArray();
+        tests = tests.Concat(BoxClassificationTests.Cases()).ToArray();
+        tests = tests.Concat(DesktopStartupTests.Cases()).ToArray();
+        tests = tests.Concat(MouseHookThreadTests.Cases()).ToArray();
         foreach (var test in tests)
         {
             try { test.Run(); Console.WriteLine($"PASS {test.Name}"); }

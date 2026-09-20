@@ -38,12 +38,12 @@ internal static class ShellContextMenu
 
     public static void ShowBackground(IntPtr owner, string folder, int screenX, int screenY, Action? onCommand = null,
         Action<string>? onCreated = null, bool desktopSurface = false,
-        Action<DesktopShellMenu.ViewSettings>? onDesktopSettings = null)
-        => ShowCore(owner, new[] { folder }, screenX, screenY, true, onCommand, onCreated, desktopSurface, onDesktopSettings);
+        Action<DesktopShellMenu.ViewSettings>? onDesktopSettings = null, Action? onDesktopSort = null)
+        => ShowCore(owner, new[] { folder }, screenX, screenY, true, onCommand, onCreated, desktopSurface, onDesktopSettings, onDesktopSort);
 
     private static void ShowCore(IntPtr owner, IReadOnlyList<string> paths, int screenX, int screenY, bool background, Action? onCommand,
         Action<string>? onCreated = null, bool desktopSurface = false,
-        Action<DesktopShellMenu.ViewSettings>? onDesktopSettings = null)
+        Action<DesktopShellMenu.ViewSettings>? onDesktopSettings = null, Action? onDesktopSort = null)
     {
         if (paths.Count == 0) return;
         using var timing = new MenuTiming(owner: true);
@@ -165,6 +165,7 @@ internal static class ShellContextMenu
 
             if (cmd > 0)
             {
+                bool sortCommand = desktopMenu is not null && DesktopSortCommand.SelectedSort(hMenu, cmd);
                 var ici = new CMINVOKECOMMANDINFO
                 {
                     cbSize = Marshal.SizeOf<CMINVOKECOMMANDINFO>(),
@@ -178,6 +179,8 @@ internal static class ShellContextMenu
                 {
                     DesktopSurfaceLease.EnsureHidden();
                     if (desktopMenu.ReadSettings() is { } settings) onDesktopSettings?.Invoke(settings);
+                    if (invoked >= 0 && sortCommand) onDesktopSort?.Invoke();
+                    MagiDesk.Infrastructure.DiagnosticLog.Write($"DESKTOP-SORT selected={sortCommand} result=0x{invoked:X8}\n");
                 }
                 if (invoked >= 0) onCommand?.Invoke();
             }

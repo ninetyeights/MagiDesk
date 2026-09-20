@@ -123,17 +123,23 @@ internal static class FullscreenDetector
     /// overall state actually changes, not on every recheck.</summary>
     public static void LogByMonitor(Dictionary<IntPtr, bool> byMonitor, Dictionary<IntPtr, IntPtr> topWindow)
     {
-        try
+        // Freeze the decision on the caller; enrich it on the bounded log worker.
+        // Native window metadata describes the later sampling time, not necessarily
+        // the instant the fullscreen state changed. Never query processes on UI.
+        var states = byMonitor.ToArray();
+        var windows = new Dictionary<IntPtr, IntPtr>(topWindow);
+        var changedAt = DateTime.Now;
+        MagiDesk.Infrastructure.DiagnosticLog.Write(() =>
         {
             var sb = new StringBuilder();
-            sb.Append(DateTime.Now.ToString("HH:mm:ss.fff")).Append(" MONITORS\n");
-            foreach (var (mon, fs) in byMonitor)
+            sb.Append(changedAt.ToString("HH:mm:ss.fff")).Append(" MONITORS metadataSampledAt=").Append(DateTime.Now.ToString("HH:mm:ss.fff")).Append('\n');
+            foreach (var (mon, fs) in states)
             {
                 var mi = new NativeMethods.MONITORINFOEX { cbSize = Marshal.SizeOf<NativeMethods.MONITORINFOEX>() };
                 string device = NativeMethods.GetMonitorInfo(mon, ref mi) ? mi.szDevice : "?";
                 sb.Append("  [").Append(device).Append(':').Append(fs ? "FS" : "-").Append("] ");
 
-                if (topWindow.TryGetValue(mon, out var hwnd))
+                if (windows.TryGetValue(mon, out var hwnd))
                 {
                     var cls = new StringBuilder(64);
                     NativeMethods.GetClassName(hwnd, cls, cls.Capacity);
@@ -151,8 +157,7 @@ internal static class FullscreenDetector
                 }
                 sb.Append('\n');
             }
-            MagiDesk.Infrastructure.DiagnosticLog.Write(sb.ToString());
-        }
-        catch { }
+            return sb.ToString();
+        });
     }
 }

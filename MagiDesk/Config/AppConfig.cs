@@ -166,6 +166,9 @@ public sealed class AppConfig
     /// <summary>Show desktop boxes without changing system desktop icons.</summary>
     public bool DesktopFencesEnabled { get; set; } = false;
     public bool DesktopUnifiedSurface { get; set; } = false;
+    public Dictionary<string, DesktopIconPosition> DesktopIconPositions { get; set; } = new();
+    public bool DesktopIconPositionsImported { get; set; }
+    public bool DesktopMultiMonitorImported { get; set; }
     public uint DesktopFencesHotkeyMods { get; set; } = 2 | 4;
     public uint DesktopFencesHotkeyVk { get; set; } = 0x46; // Ctrl+Shift+F; zero disables.
     /// <summary>User's fence boxes. One is flagged unsorted (the catch-all).
