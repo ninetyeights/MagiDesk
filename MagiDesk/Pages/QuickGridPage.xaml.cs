@@ -58,6 +58,7 @@ public partial class QuickGridPage : Page
         var cfg = AppConfig.Current;
         TsEnabled.IsChecked = cfg.QuickGridEnabled;
         TsRestore.IsChecked = cfg.QuickGridRestoreOnDrag;
+        TsPositionPreview.IsChecked = cfg.QuickGridPositionPreview;
         RbCurrent.IsChecked = !cfg.QuickGridShowAllMonitors;
         RbAll.IsChecked     =  cfg.QuickGridShowAllMonitors;
         _loading = false;
@@ -122,6 +123,13 @@ public partial class QuickGridPage : Page
     {
         if (_loading) return;
         AppConfig.Current.QuickGridShowAllMonitors = RbAll.IsChecked == true;
+        AppConfig.Current.Save();
+    }
+
+    private void PositionPreview_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_loading) return;
+        AppConfig.Current.QuickGridPositionPreview = TsPositionPreview.IsChecked == true;
         AppConfig.Current.Save();
     }
 

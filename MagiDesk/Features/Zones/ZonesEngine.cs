@@ -202,22 +202,26 @@ internal sealed class ZonesEngine : IDisposable
     }
 
     /// <summary>
-    /// Restore to the ORIGINAL size, positioned so the cursor keeps the same
-    /// grip offset on the title bar it had when the user first grabbed the
-    /// snapped window — clamped to stay inside the new window bounds so the
-    /// cursor never falls off the title bar.
+    /// Restore the original size while preserving the proportional grab point.
     /// </summary>
+    internal static POINT ProportionalRestorePosition(RECT snapped, RECT original, POINT grab, POINT cursor)
+    {
+        double xRatio = Math.Clamp((double)grab.X / Math.Max(1, snapped.Width), 0, 1);
+        double yRatio = Math.Clamp((double)grab.Y / Math.Max(1, snapped.Height), 0, 1);
+        return new POINT
+        {
+            X = cursor.X - (int)Math.Round(original.Width * xRatio),
+            Y = cursor.Y - (int)Math.Round(original.Height * yRatio),
+        };
+    }
+
     private static void RestoreSizeUnderCursor(IntPtr hwnd, RECT currentSnapped, RECT original, POINT grabOffset)
     {
-        GetCursorPos(out var cur);
+        if (!GetCursorPos(out var cur)) return;
         int ow = original.Width, oh = original.Height;
-
-        const int titleBarGuess = 32;
-        int ox = Math.Clamp(grabOffset.X, 10, Math.Max(10, ow - 10));
-        int oy = Math.Clamp(grabOffset.Y, 2,  Math.Max(2,  Math.Min(titleBarGuess, oh) - 2));
-
-        int newX = cur.X - ox;
-        int newY = cur.Y - oy;
+        var position = ProportionalRestorePosition(currentSnapped, original, grabOffset, cur);
+        int newX = position.X;
+        int newY = position.Y;
 
         // SetWindowPos alone gets silently ignored (size-wise) on Win11 once
         // the window is in the OS snap-group state — SWP returns TRUE but the
@@ -228,7 +232,21 @@ internal sealed class ZonesEngine : IDisposable
         if (GetWindowPlacement(hwnd, ref wp))
         {
             wp.showCmd          = 1 /*SW_SHOWNORMAL*/;
-            wp.rcNormalPosition = new RECT { Left = newX, Top = newY, Right = newX + ow, Bottom = newY + oh };
+            var target = new RECT { Left = newX, Top = newY, Right = newX + ow, Bottom = newY + oh };
+            // Normal placement uses workspace coordinates, except for tool windows.
+            if ((GetWindowLong(hwnd, -20) & 0x80) == 0)
+            {
+                var monitor = MonitorFromRect(ref target, MONITOR_DEFAULTTONEAREST);
+                var info = new MONITORINFOEX { cbSize = Marshal.SizeOf<MONITORINFOEX>() };
+                if (GetMonitorInfo(monitor, ref info))
+                {
+                    int dx = info.rcWork.Left - info.rcMonitor.Left;
+                    int dy = info.rcWork.Top - info.rcMonitor.Top;
+                    target.Left -= dx; target.Right -= dx;
+                    target.Top -= dy; target.Bottom -= dy;
+                }
+            }
+            wp.rcNormalPosition = target;
             bool ok = SetWindowPlacement(hwnd, ref wp);
             Log($"ZONES   SetWindowPlacement ok={ok} target=[{newX},{newY} {ow}x{oh}]");
         }

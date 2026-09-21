@@ -184,6 +184,7 @@ public sealed class AppConfig
 
     // ---- Quick Grid (ad-hoc rows×cols picker via hotkey) -----------------
     public bool QuickGridEnabled          { get; set; } = true;
+    public bool QuickGridPositionPreview { get; set; } = false;
     public bool QuickGridRestoreOnDrag    { get; set; } = true;
     /// <summary>Hotkey as RegisterHotKey modifiers bitmask. ALT=1, CTRL=2, SHIFT=4, WIN=8.</summary>
     public uint QuickGridHotkeyMods       { get; set; } = 2 | 4; // Ctrl+Shift

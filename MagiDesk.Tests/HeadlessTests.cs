@@ -17,10 +17,46 @@ internal static class HeadlessTests
     private static TaskCompletionSource Signal() => new(TaskCreationOptions.RunContinuationsAsynchronously);
     private static async Task Await(Task task) => await task.WaitAsync(TimeSpan.FromSeconds(10));
 
+    private static void QuickGridPreviewGeometry()
+    {
+        var work = new MagiDesk.Native.NativeMethods.RECT { Left = -1920, Top = 40, Right = 0, Bottom = 1080 };
+        var canvas = new Rect(10, 20, 192, 104);
+        var window = new MagiDesk.Native.NativeMethods.RECT { Left = -1920, Top = 40, Right = -960, Bottom = 560 };
+        var actual = MagiDesk.Features.QuickGrid.QuickGridWindow.ProjectPreviewBounds(window, work, canvas);
+        Check(actual == new Rect(10, 20, 96, 52), "negative monitor and taskbar inset map correctly");
+        window.Left = -2400;
+        window.Top = -100;
+        Check(MagiDesk.Features.QuickGrid.QuickGridWindow.ProjectPreviewBounds(window, work, canvas) == actual,
+            "offscreen edges are clipped");
+        window.Left = 10; window.Right = 400;
+        Check(MagiDesk.Features.QuickGrid.QuickGridWindow.ProjectPreviewBounds(window, work, canvas).IsEmpty,
+            "other monitor has no marker");
+        Check(MagiDesk.Features.QuickGrid.QuickGridWindow.ProjectPreviewBounds(window, default, canvas).IsEmpty,
+            "invalid work area avoids division by zero");
+        Check(!new AppConfig().QuickGridPositionPreview, "preview is opt-in");
+    }
+    private static void ProportionalRestore()
+    {
+        var snapped = new MagiDesk.Native.NativeMethods.RECT { Right = 1000, Bottom = 800 };
+        var original = new MagiDesk.Native.NativeMethods.RECT { Right = 600, Bottom = 400 };
+        var cursor = new MagiDesk.Native.NativeMethods.POINT { X = -500, Y = 200 };
+        var grab = new MagiDesk.Native.NativeMethods.POINT { X = 300, Y = 40 };
+        var p = MagiDesk.Features.Zones.ZonesEngine.ProportionalRestorePosition(snapped, original, grab, cursor);
+        Check(p.X == -680 && p.Y == 180, "30 percent horizontal and 5 percent vertical grab retained");
+        grab.X = 1000; grab.Y = 800;
+        p = MagiDesk.Features.Zones.ZonesEngine.ProportionalRestorePosition(snapped, original, grab, cursor);
+        Check(p.X == -1100 && p.Y == -200, "bottom right stays under cursor");
+        grab.X = -10; grab.Y = -20;
+        p = MagiDesk.Features.Zones.ZonesEngine.ProportionalRestorePosition(snapped, original, grab, cursor);
+        Check(p.X == cursor.X && p.Y == cursor.Y, "outside grab clamps to top left");
+    }
+
     public static int Run()
     {
         var tests = new (string Name, Action Run)[]
         {
+            ("zones: proportional restore grab position", ProportionalRestore),
+            ("quick grid: preview clips and maps physical bounds", QuickGridPreviewGeometry),
             ("fences: unified desktop partition and opt-in persistence", UnifiedDesktop),
             ("fences: shell new-item attribution stays in originating folder", NewItemAttribution),
             ("fences: elastic grid spacing and marquee agree", ElasticFenceGrid),

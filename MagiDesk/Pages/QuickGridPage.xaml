@@ -81,7 +81,7 @@
                         </Grid.ColumnDefinitions>
                         <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,12,0">
                             <TextBlock Text="拖拽恢复原始尺寸" FontWeight="SemiBold"/>
-                            <TextBlock Text="吸附后的窗口再次拖动时，仅恢复大小，位置跟随光标抓取点。"
+                            <TextBlock Text="吸附后的窗口再次拖动时，恢复原始大小，并保持鼠标抓取点在窗口内的相对比例。"
                                        FontSize="12"
                                        Foreground="{DynamicResource TextFillColorSecondaryBrush}"
                                        TextWrapping="Wrap"
@@ -90,6 +90,20 @@
                         <ui:ToggleSwitch x:Name="TsRestore" Grid.Column="1"
                                          VerticalAlignment="Center"
                                          Checked="Restore_Changed" Unchecked="Restore_Changed"/>
+                    </Grid>
+                </ui:Card>
+
+                <ui:Card HorizontalAlignment="Stretch" Padding="18,16" Margin="0,0,0,12">
+                    <Grid>
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                        <StackPanel Margin="0,0,12,0">
+                            <TextBlock Text="窗口位置预览" FontWeight="SemiBold"/>
+                            <TextBlock Text="在网格中标出当前窗口；框选时在目标屏幕显示落点轮廓，松开后应用。"
+                                       FontSize="12" TextWrapping="Wrap" Margin="0,2,0,0"
+                                       Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                        </StackPanel>
+                        <ui:ToggleSwitch x:Name="TsPositionPreview" Grid.Column="1" VerticalAlignment="Center"
+                                         Checked="PositionPreview_Changed" Unchecked="PositionPreview_Changed"/>
                     </Grid>
                 </ui:Card>
 
