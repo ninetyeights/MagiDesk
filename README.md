@@ -1,7 +1,3 @@
-> Release preparation: **0.1.0-beta.1**. See [release and recovery guide](docs/RELEASE.md) (Chinese), [changelog](CHANGELOG.md), and the [current Chinese feature guide](README.zh-CN.md). The self-contained ZIP requires no separate .NET installation. Only window dragging is enabled on first launch.
->
-> Dock now manages applications and browser profiles through collections and sections. Browser launch parameters have a separate page. Desktop boxes include a unified desktop mode with a recovery helper. See the current guide for these newer features.
-
 # MagiDesk
 
 **English** | [中文](README.zh-CN.md)
@@ -13,6 +9,28 @@ Built with **C# / WPF / .NET 10** and [WPF-UI](https://github.com/lepoco/wpfui)
 (Fluent + Mica, light/dark follows the system theme). Per-monitor-v2 DPI aware.
 
 > Personal project, actively evolving. UI is in Simplified Chinese.
+
+**[Download v0.1.0-beta.1](https://github.com/ninetyeights/MagiDesk/releases/tag/v0.1.0-beta.1)** · [All releases](https://github.com/ninetyeights/MagiDesk/releases) · [Changelog](CHANGELOG.md) · [Report an issue](https://github.com/ninetyeights/MagiDesk/issues)
+
+## Download and get started
+
+The first release is a **public beta**, primarily targeting Windows 11 x64. Installer and portable packages include .NET; no separate runtime installation is required.
+
+| Package | Choose this for |
+| --- | --- |
+| `win-x64-Setup-*.exe` | Installation on Intel / AMD Windows PCs |
+| `win-arm64-Setup-*.exe` | Windows ARM64 devices; real-device validation is still pending |
+| `win-x64-*.zip` / `win-arm64-*.zip` | Portable use: extract the entire archive, then run `MagiDesk.exe` |
+
+1. Download the package matching your device. Installers use a per-user directory and require no administrator access.
+2. Launch MagiDesk. **Only Window Drag is enabled by default**; enable other tools as needed in the sidebar.
+3. Hold **Alt + left-drag** to move a window, or **Alt + right-drag** to resize it.
+4. Closing the main window normally leaves MagiDesk in the tray. Double-click its tray icon to reopen it; choose **退出 (Exit)** to quit.
+
+Installer upgrades and uninstall preserve your configuration and desktop files. Back up `%APPDATA%\MagiDesk` before upgrading. The installer currently has no Windows Authenticode signature; signed update manifests are a separate integrity mechanism.
+
+See the [installation and recovery guide](docs/RELEASE.md) (Chinese) for details.
+
 
 ## Tools
 
@@ -68,6 +86,16 @@ from Dock; focusing an existing window does not reapply arguments.
   fallback, and rolling daily backups.
 - Diagnostic log at `%TEMP%\magidesk.log`.
 
+## Updates and beta limitations
+
+Check for updates from the About page. Automatic checking is off by default. Downloads and the installer helper verify the signed update manifest and package hash before installation. Updating a portable copy through this entry point installs the per-user edition.
+
+- Cross-DPI restoration of File Explorer may briefly show a blank transition.
+- Windows 10, ARM64, remote desktop reconnects and monitor hot-plugging have not been comprehensively validated on real devices.
+- The first release passed 346 headless tests and dependency/secret scans; these do not replace desktop and installation testing.
+
+When reporting a problem, include the app version, Windows version, monitor scaling and reproduction steps. Review `%TEMP%\magidesk.log` for personal information before sharing relevant excerpts.
+
 ## Build & Run
 
 Development builds require the **.NET 10 SDK** on Windows. See the release guide
@@ -99,3 +127,9 @@ MagiDesk/
   Hooks/           # low-level mouse hook
 MagiDesk.Tests/    # console integration tests
 ```
+
+## Release builds
+
+The SDK is selected by `global.json`, and NuGet dependencies use checked-in lock files. `scripts/Publish-Release.ps1 -Installer` runs security checks and headless tests before packaging; installer builds require Inno Setup 6.3+.
+
+Pushing a matching version tag triggers GitHub Actions to build x64 and ARM64 packages and create a draft release. Installers are signed through an offline update manifest before publication. See the [signing guide](docs/UPDATE-SIGNING.md). Private signing keys are never uploaded to GitHub.

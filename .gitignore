@@ -65,3 +65,8 @@ tree_layout_backup.zip
 *.pfx
 *.p12
 *.key
+
+# Local planning and agent instructions
+TODO.md
+AGENTS.md
+AGENTGS.md
