@@ -30,6 +30,9 @@ public enum AvatarBgStyle
     Horizontal = 3,
     /// <summary>Vertical gradient, top to bottom.</summary>
     Vertical = 4,
+    Split = 5,
+    DiagonalSplit = 6,
+    Spotlight = 7,
 }
 
 /// <summary>Small decorative shape rendered on top of the avatar for visual
@@ -50,18 +53,42 @@ public enum AvatarOverlay
 }
 
 /// <summary>Per-Chrome-profile user overrides for the browser badge feature.</summary>
-public sealed class BrowserProfileSettings
+public sealed class BrowserProfileSettings : AvatarStyle
 {
     /// <summary>Whether to show a floating badge for windows of this profile.</summary>
     public bool Visible { get; set; } = true;
     /// <summary>Badge background color as <c>#RRGGBB</c>. Null = fall back to
     /// the profile's Chrome highlight color, then a neutral blue.</summary>
     public string? ColorHex { get; set; }
+    /// <summary>Shared base color; legacy overrides remain independent.</summary>
+    public string? ThemeColorHex { get; set; }
+    public void SetThemeColor(string color)
+    {
+        ThemeColorHex = color;
+        ColorHex = null;
+        AvatarBgHex = null;
+        AvatarTextColorHex = null;
+    }
     /// <summary>Absolute path to a user-uploaded avatar PNG. Null = use the
     /// Chrome-cached GAIA picture if present, otherwise a letter circle.</summary>
     public string? CustomAvatarPath { get; set; }
+}
+
+/// <summary>Shared text-icon appearance for browser badges and pinned applications.</summary>
+public class AvatarStyle
+{
+    public void ApplyAppearanceTo(AvatarStyle target)
+    {
+        target.AvatarBgHex = AvatarBgHex;
+        target.AvatarBgHex2 = AvatarBgHex2;
+        target.AvatarTextColorHex = AvatarTextColorHex;
+        target.AvatarShape = AvatarShape;
+        target.AvatarBgStyle = AvatarBgStyle;
+        target.AvatarOverlay = AvatarOverlay;
+    }
+    public AvatarStyle Copy() => (AvatarStyle)MemberwiseClone();
     /// <summary>User-picked text (1–3 chars) for a letter-style avatar. Used
-    /// when <see cref="CustomAvatarPath"/> is null. Null/empty falls through
+    /// when no custom image is selected. Null/empty falls through
     /// to the GAIA picture / profile initial.</summary>
     public string? AvatarText { get; set; }
     /// <summary>Background color (hex) for the text avatar. Null = fall back

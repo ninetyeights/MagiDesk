@@ -9,13 +9,25 @@
                   VerticalScrollBarVisibility="Auto"
                   HorizontalScrollBarVisibility="Disabled"
                   Padding="0">
-        <Grid Margin="16,16,20,16">
+        <Grid Margin="16,0,20,16">
             <StackPanel HorizontalAlignment="Stretch" MaxWidth="1100">
-                <TextBlock Text="桌面盒子（开发中）" FontSize="28" FontWeight="SemiBold"/>
-                <TextBlock Text="Fences / Coodesker 式桌面整理。使用独立盒子整理文件或映射文件夹，可试用统一桌面显示。"
-                           Foreground="{DynamicResource TextFillColorSecondaryBrush}"
-                           TextWrapping="Wrap"
-                           Margin="0,2,0,16"/>
+                <Grid Margin="0,0,0,14">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Margin="0,0,24,0">
+                        <TextBlock Text="桌面盒子（开发中）" FontSize="28" FontWeight="SemiBold"/>
+                        <TextBlock Text="Fences / Coodesker 式桌面整理。使用独立盒子整理文件或映射文件夹，可试用统一桌面显示。" TextWrapping="Wrap"
+                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="0,2,0,0"/>
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" VerticalAlignment="Center" HorizontalAlignment="Center">
+                        <TextBlock Text="启用" FontSize="12" HorizontalAlignment="Center" Margin="0,0,0,2"
+                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                        <ui:ToggleSwitch x:Name="TsEnabled" HorizontalAlignment="Center"
+                                         Checked="Enabled_Changed" Unchecked="Enabled_Changed"/>
+                    </StackPanel>
+                </Grid>
 
                 <ui:Card HorizontalAlignment="Stretch" Padding="18,16" Margin="0,0,0,12">
                     <StackPanel>
@@ -27,7 +39,7 @@
                         <TextBlock Text="启用桌面盒子后，按热键临时显示在应用上方。再次按热键、Esc 或切换到其他应用后回到桌面。方向键选择，Tab 切换盒子，Enter 打开。"
                                    TextWrapping="Wrap" Margin="0,4,0,10"/>
                         <StackPanel Orientation="Horizontal">
-                            <ui:Button x:Name="BtnPeekHotkey" Content="Ctrl + Shift + F" Click="RecordPeekHotkey_Click" MinWidth="170"/>
+                            <ui:Button x:Name="BtnPeekHotkey" Content="Ctrl + Shift + D" Click="RecordPeekHotkey_Click" MinWidth="170"/>
                             <ui:Button Content="重置" Click="ResetPeekHotkey_Click" Margin="8,0,0,0"/>
                             <ui:Button Content="清除" Click="ClearPeekHotkey_Click" Margin="8,0,0,0"/>
                         </StackPanel>
@@ -35,25 +47,6 @@
                     </StackPanel>
                 </ui:Card>
 
-                <ui:Card HorizontalAlignment="Stretch" Padding="18,16" Margin="0,0,0,12">
-                    <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="Auto"/>
-                        </Grid.ColumnDefinitions>
-                        <StackPanel Grid.Column="0" VerticalAlignment="Center">
-                            <TextBlock Text="启用桌面盒子" FontWeight="SemiBold"/>
-                            <TextBlock Text="在桌面上显示盒子（图标双击可打开，盒子可拖动/缩放，位置会记住）。"
-                                       FontSize="12"
-                                       Foreground="{DynamicResource TextFillColorSecondaryBrush}"
-                                       TextWrapping="Wrap"
-                                       Margin="0,2,8,0"/>
-                        </StackPanel>
-                        <ui:ToggleSwitch x:Name="TsEnabled" Grid.Column="1"
-                                         VerticalAlignment="Center"
-                                         Checked="Enabled_Changed" Unchecked="Enabled_Changed"/>
-                    </Grid>
-                </ui:Card>
 
                 <ui:Card HorizontalAlignment="Stretch" Padding="18,16" Margin="0,0,0,12">
                     <Grid>
@@ -81,7 +74,7 @@
                 <ui:Card HorizontalAlignment="Stretch" Padding="18,16" Margin="0,0,0,12">
                     <StackPanel>
                         <TextBlock Text="盒子外观" FontWeight="SemiBold"/>
-                        <TextBlock Text="选择盒子或分页，调整其外观。" Margin="0,4,0,12"/>
+                        <TextBlock Text="选择整个盒子统一调整，或选择下方缩进的分页单独设置。" Margin="0,4,0,12"/>
                         <ComboBox x:Name="AppearanceBox" DisplayMemberPath="Name" SelectedValuePath="Id"
                                   HorizontalAlignment="Stretch" SelectionChanged="AppearanceBox_Changed"/>
                         <TextBlock x:Name="AppearanceEmpty" Text="暂无盒子，请先启用或新建盒子。" Margin="0,8,0,0"/>
@@ -92,6 +85,20 @@
                             <Slider x:Name="AppearanceTransparency" Minimum="0" Maximum="90" TickFrequency="1"
                                     IsSnapToTickEnabled="True" ValueChanged="AppearanceTransparency_Changed"
                                     LostMouseCapture="AppearanceTransparency_Committed"/>
+                            <TextBlock Text="背景图片" Margin="0,12,0,6"/>
+                            <StackPanel Orientation="Horizontal">
+                                <ui:Button Content="选择图片…" Click="ChooseBackgroundImage_Click"/>
+                                <ui:Button Content="移除图片" Click="RemoveBackgroundImage_Click" Margin="8,0,0,0"/>
+                            </StackPanel>
+                            <TextBlock x:Name="BackgroundImageName" TextWrapping="Wrap" Margin="0,6,0,0"/>
+                            <ComboBox x:Name="BackgroundImageMode" SelectedIndex="0" Margin="0,6,0,0"
+                                      SelectionChanged="BackgroundImageMode_Changed">
+                                <ComboBoxItem Content="填满（等比裁剪）"/>
+                                <ComboBoxItem Content="完整显示（保留留白）"/>
+                            </ComboBox>
+                            <TextBlock Text="图片透明度跟随上方设置；保留原图片文件，移走或删除后将恢复背景色。"
+                                       TextWrapping="Wrap" FontSize="12" Margin="0,6,0,0"/>
+                            <TextBlock x:Name="BackgroundImageError" Visibility="Collapsed" TextWrapping="Wrap" Margin="0,6,0,0"/>
                             <TextBlock Text="背景色" Margin="0,12,0,6"/>
                             <ComboBox x:Name="AppearanceColor" DisplayMemberPath="Label"
                                       SelectionChanged="AppearanceColor_Changed"/>

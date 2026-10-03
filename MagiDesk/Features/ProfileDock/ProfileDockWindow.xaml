@@ -58,10 +58,21 @@
                 </Setter.Value>
             </Setter>
         </Style>
+        <Style x:Key="DockScrollButtonStyle" TargetType="Button" BasedOn="{StaticResource DockButtonStyle}">
+            <Setter Property="Opacity" Value="0.35"/>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Opacity" Value="1"/>
+                </Trigger>
+                <Trigger Property="IsKeyboardFocused" Value="True">
+                    <Setter Property="Opacity" Value="1"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
     </Window.Resources>
 
     <Border x:Name="DockRoot"
-            CornerRadius="8"
+            CornerRadius="0"
             BorderThickness="1"
             BorderBrush="{DynamicResource DockBorderBrush}"
             Background="{DynamicResource DockBackgroundBrush}"
@@ -69,6 +80,26 @@
             MouseLeftButtonDown="Dock_MouseDown"
             MouseMove="Dock_MouseMove"
             MouseLeftButtonUp="Dock_MouseUp">
-        <StackPanel x:Name="ButtonPanel" Orientation="Horizontal"/>
+        <Grid x:Name="DockContent" HorizontalAlignment="Center">
+            <Button x:Name="ScrollPrevious" Width="28" HorizontalAlignment="Left" Panel.ZIndex="1"
+                    Background="{DynamicResource DockScrollBackgroundBrush}" PreviewMouseWheel="Items_MouseWheel"
+                    Style="{StaticResource DockScrollButtonStyle}" Foreground="{DynamicResource DockTextBrush}"
+                    Visibility="Collapsed" ToolTip="向左滚动" AutomationProperties.Name="向左滚动" Click="ScrollPrevious_Click">
+                <Path Data="M 8,1 L 2,7 L 8,13" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                      StrokeThickness="1.5" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"/>
+            </Button>
+        <ScrollViewer x:Name="ItemsViewport" CanContentScroll="False"
+                      HorizontalScrollBarVisibility="Hidden" VerticalScrollBarVisibility="Disabled"
+                      PreviewMouseWheel="Items_MouseWheel" ScrollChanged="Items_ScrollChanged">
+            <WrapPanel x:Name="ButtonPanel" Orientation="Horizontal"/>
+        </ScrollViewer>
+            <Button x:Name="ScrollFollowing" Width="28" HorizontalAlignment="Right" Panel.ZIndex="1"
+                    Background="{DynamicResource DockScrollBackgroundBrush}" PreviewMouseWheel="Items_MouseWheel"
+                    Style="{StaticResource DockScrollButtonStyle}" Foreground="{DynamicResource DockTextBrush}"
+                    Visibility="Collapsed" ToolTip="向右滚动" AutomationProperties.Name="向右滚动" Click="ScrollFollowing_Click">
+                <Path Data="M 2,1 L 8,7 L 2,13" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                      StrokeThickness="1.5" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"/>
+            </Button>
+        </Grid>
     </Border>
 </Window>

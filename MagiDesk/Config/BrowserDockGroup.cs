@@ -1,11 +1,10 @@
 namespace MagiDesk.Config;
 
-/// <summary>Named collection of Chrome profile directories shown together
-/// on the dock. Groups render contiguously with a gap between them, giving
-/// the dock a visual structure without hiding any individual profile.</summary>
+/// <summary>Ordered group of browser accounts and fixed applications on the dock.</summary>
 public sealed class BrowserDockGroup
 {
     public string Name { get; set; } = string.Empty;
+    // Keep the historical JSON field for compatibility. Entries are browser:key or app:id.
     public List<string> ProfileDirs { get; set; } = new();
 }
 

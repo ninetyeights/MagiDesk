@@ -11,6 +11,10 @@ namespace MagiDesk.Features.DesktopFences;
 /// </summary>
 internal static class ShellContextMenu
 {
+    // TrackPopupMenu runs a nested UI message loop. Deferred box activation
+    // must not raise a topmost box over the menu during that loop.
+    private static int _openMenus;
+    internal static bool IsOpen => _openMenus > 0;
     private static readonly Lazy<ShellMenuPrewarmer> Prewarmer = new(() => new ShellMenuPrewarmer(Prewarm));
     public static void RequestPrewarm(string path, bool folder) => Prewarmer.Value.Request(path, folder);
     private sealed class MenuTiming : IDisposable
@@ -58,6 +62,7 @@ internal static class ShellContextMenu
         using var desktopMenu = desktopSurface ? new DesktopShellMenu() : null;
         IObjectWithSite? menuSite = null;
         object? originalSite = null;
+        _openMenus++;
         try
         {
             var iidMenu = IID_IContextMenu;
@@ -188,6 +193,7 @@ internal static class ShellContextMenu
         catch { /* best-effort; never crash the box on a shell quirk */ }
         finally
         {
+            _openMenus--;
             // Restore Explorer's site; async commands retain their own references.
             if (menuSite is not null)
             {

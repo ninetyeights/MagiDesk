@@ -13,7 +13,7 @@
                   VerticalScrollBarVisibility="Auto"
                   HorizontalScrollBarVisibility="Disabled"
                   Padding="0">
-        <Grid Margin="16,16,20,16">
+        <Grid Margin="16,0,20,16">
             <StackPanel HorizontalAlignment="Stretch" MaxWidth="1200">
 
                 <!-- Header + compact settings row -->
@@ -24,7 +24,7 @@
                     </Grid.ColumnDefinitions>
                     <StackPanel Grid.Column="0">
                         <TextBlock Text="窗口分区" FontSize="28" FontWeight="SemiBold"/>
-                        <TextBlock Text="按住 Shift 拖动窗口 → 显示当前显示器的分区 → 松开吸附。每个显示器可独立配置。"
+                        <TextBlock Text="按住 Shift 拖动窗口，滚轮切换当前屏幕布局，松开鼠标吸附。每个显示器可独立配置。"
                                    Foreground="{DynamicResource TextFillColorSecondaryBrush}"
                                    Margin="0,2,0,0"/>
                     </StackPanel>

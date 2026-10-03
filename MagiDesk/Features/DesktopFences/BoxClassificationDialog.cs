@@ -15,6 +15,9 @@ internal static class BoxClassificationDialog
             new() { Name = "图片", Extensions = "jpg,jpeg,png,gif,webp,bmp,svg,heic" },
             new() { Name = "文档", Extensions = "pdf,doc,docx,xls,xlsx,ppt,pptx,txt,md" },
             new() { Name = "压缩包", Extensions = "zip,7z,rar,tar,gz" },
+            new() { Name = "视频", Extensions = "mp4,mkv,avi,mov,wmv,flv,webm,m4v,mpeg,mpg,ts" },
+            new() { Name = "音频", Extensions = "mp3,wav,flac,aac,m4a,ogg,wma,opus,aiff" },
+            new() { Name = "安装包", Extensions = "exe,msi,msix,msixbundle,appx,appxbundle,apk" },
         };
         if (existing is not null) rules = new ObservableCollection<BoxClassificationRule>(existing);
         var dialog = new Wpf.Ui.Controls.FluentWindow { Title = "盒子规则分类", Width = 820, Height = 470,
@@ -69,6 +72,7 @@ internal static class BoxClassificationDialog
             result = rules.ToList(); dialog.DialogResult = true;
         };
         dialog.Content = root;
+        MagiDesk.Native.AuxiliaryWindow.Attach(dialog);
         return dialog.ShowDialog() == true ? result : null;
     }
 }

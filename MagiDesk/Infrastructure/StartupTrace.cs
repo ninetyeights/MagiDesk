@@ -14,6 +14,7 @@ internal static class StartupTrace
     private static Timer? _sampler;
     private static DispatcherTimer? _heartbeat;
     private static long _lastBeat;
+    private static long _lastMemorySample;
     private static readonly Dictionary<DispatcherOperation, long> UiOperations = new();
     private static readonly RenderPhaseCounter RenderPhases = new();
     private static readonly Dictionary<DispatcherOperation, Dictionary<string, RenderPhaseCounter.Total>> RenderStarts = new();
@@ -22,7 +23,7 @@ internal static class StartupTrace
 
     internal static void Start(Dispatcher? dispatcher, string role)
     {
-        if (Interlocked.Exchange(ref _started, 1) != 0) return;
+        if (!DiagnosticLog.Verbose || Interlocked.Exchange(ref _started, 1) != 0) return;
         Clock.Start();
         Mark("session", $"role={role} cpu={Environment.ProcessorCount}");
         Mark("render.experiment", $"desktopLabelShadowDisabled={DesktopRenderExperiment.DisableDesktopLabelShadow}");
@@ -37,6 +38,11 @@ internal static class StartupTrace
             _heartbeat.Tick += (_, _) =>
             {
                 long now = Clock.ElapsedMilliseconds, gap = now - _lastBeat; _lastBeat = now;
+                if (Enabled && now - _lastMemorySample >= 5000)
+                {
+                    _lastMemorySample = now;
+                    AppMemoryTrace.Sample();
+                }
                 if (gap >= 500) Mark("ui-stall", $"gapMs={gap}");
                 if (!Enabled)
                 {

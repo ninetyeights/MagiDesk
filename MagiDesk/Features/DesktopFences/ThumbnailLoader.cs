@@ -8,6 +8,7 @@ namespace MagiDesk.Features.DesktopFences;
 internal static class ThumbnailLoader
 {
     internal const int Size = 96;
+    internal static string MemorySummary() => Cache.MemorySummary() + ";" + Icons.MemorySummary();
     private static readonly AsyncResourceCache<ImageSource> Cache = new(
         key =>
         {

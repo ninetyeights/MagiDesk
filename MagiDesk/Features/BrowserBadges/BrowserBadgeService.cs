@@ -66,6 +66,10 @@ public sealed class BrowserBadgeService : IDisposable
     public BrowserBadgeService(Dispatcher ui)
     {
         _ui = ui;
+        _positionSession = new BadgePositionSession(() =>
+        {
+            foreach (var entry in _byHwnd.Values.ToArray()) entry.Window.CompletePositionAdjustment();
+        });
         _scanRequest = new(action => _ui.BeginInvoke(action, DispatcherPriority.Background),
             () => _ = ScanSafelyAsync());
     }
@@ -326,6 +330,29 @@ public sealed class BrowserBadgeService : IDisposable
     /// <summary>(HWND, profileKey) pairs for browser windows whose profile we
     /// already know from cache. Does not trigger any fresh resolution — safe
     /// to call at high frequency for dock status updates.</summary>
+    internal async Task RefreshDockWindowProfilesAsync(IEnumerable<(IntPtr Hwnd, uint Pid, string Exe)> windows)
+    {
+        // Dock tracking must also resolve accounts when floating badges are disabled.
+        // Reuse the resolver/cache; never enable UI Automation for background polling.
+        foreach (var (hwnd, pid, exe) in windows)
+        {
+            if (_disposed) return;
+            var browser = BrowserInfo.MatchExe(exe);
+            if (browser is null || !IsCurrentWindow(hwnd, (int)pid)) continue;
+            if (_profileKeyByHwnd.TryGetValue(hwnd, out var known) && known is not null) continue;
+            await ResolveProfileKeyForWindowAsync(hwnd, (int)pid, GetWindowTitle(hwnd), browser, allowUia: false);
+        }
+    }
+
+    private readonly BadgePositionSession _positionSession;
+    public bool SetPositionAdjustment(bool editing)
+    {
+        bool changed = _positionSession.SetEditing(editing);
+        if (changed)
+            foreach (var entry in _byHwnd.Values.ToArray()) entry.Window.ApplyUnlockState(AppConfig.Current.BrowserBadgeUnlocked);
+        return changed;
+    }
+
     public IEnumerable<(IntPtr Hwnd, string ProfileKey)> CachedProfileWindows()
     {
         foreach (var hwnd in EnumerateAllBrowserHwnds())
@@ -373,6 +400,7 @@ public sealed class BrowserBadgeService : IDisposable
 
     public void Dispose()
     {
+        _positionSession.Dispose();
         _disposed = true;
         _scanVersion.Next();
         AppConfig.Changed -= OnConfigChanged;
@@ -398,6 +426,10 @@ public sealed class BrowserBadgeService : IDisposable
     private void OnConfigChanged()
     {
         if (_disposed) return;
+        if (!AppConfig.Current.BrowserBadgeEnabled && AppConfig.Current.BrowserBadgeUnlocked)
+        {
+            _ui.BeginInvoke(new Action(() => _positionSession.SetEditing(false)));
+        }
         string snapshot = BadgeSettingsSnapshot.Capture(AppConfig.Current);
         if (snapshot == _settingsSnapshot) return;
         _settingsSnapshot = snapshot;

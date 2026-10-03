@@ -58,36 +58,30 @@
                   VerticalScrollBarVisibility="Auto"
                   HorizontalScrollBarVisibility="Disabled"
                   Padding="0">
-        <Grid Margin="16,16,20,16">
+        <Grid Margin="16,0,20,16">
             <StackPanel x:Name="RootPanel" HorizontalAlignment="Stretch" MaxWidth="1000">
 
-            <TextBlock Text="窗口拖动"
-                       FontSize="28" FontWeight="SemiBold"/>
-            <TextBlock Text="按住修饰键 + 鼠标拖动任意窗口。AltSnap 风格。"
-                       Foreground="{DynamicResource TextFillColorSecondaryBrush}"
-                       Margin="0,2,0,20"/>
-
-            <!-- Enable/disable -->
-            <ui:Card HorizontalAlignment="Stretch" Padding="18,16" Margin="0,0,0,12">
-                <Grid>
+                <Grid Margin="0,0,0,14">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
-                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
-                        <TextBlock Text="启用窗口拖动" FontWeight="SemiBold"/>
-                        <TextBlock x:Name="TxtEnabledSub"
-                                   FontSize="12"
-                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"
-                                   Margin="0,2,0,0"/>
+                    <StackPanel Margin="0,0,24,0">
+                        <TextBlock Text="窗口拖动" FontSize="28" FontWeight="SemiBold"/>
+                        <TextBlock Text="按住修饰键 + 鼠标拖动任意窗口。AltSnap 风格。" TextWrapping="Wrap"
+                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="0,2,0,0"/>
+                        <TextBlock x:Name="TxtEnabledSub" FontSize="12" TextWrapping="Wrap"
+                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="0,4,0,0"/>
                     </StackPanel>
-                    <ui:ToggleSwitch x:Name="TsEnabled"
-                                     Grid.Column="1"
-                                     VerticalAlignment="Center"
-                                     Checked="Enabled_Changed"
-                                     Unchecked="Enabled_Changed"/>
+                    <StackPanel Grid.Column="1" VerticalAlignment="Center" HorizontalAlignment="Center">
+                        <TextBlock Text="启用" FontSize="12" HorizontalAlignment="Center" Margin="0,0,0,2"
+                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                        <ui:ToggleSwitch x:Name="TsEnabled" HorizontalAlignment="Center"
+                                         Checked="Enabled_Changed" Unchecked="Enabled_Changed"/>
+                    </StackPanel>
                 </Grid>
-            </ui:Card>
+
+            <!-- Enable/disable -->
 
             <!-- Settings group (dimmed when disabled) -->
             <StackPanel x:Name="SettingsGroup">
@@ -151,7 +145,32 @@
                 </StackPanel>
             </ui:Card>
 
+            <ui:Card HorizontalAlignment="Stretch" Padding="18,16" Margin="0,0,0,12">
+                <Grid>
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                    <StackPanel Margin="0,0,12,0">
+                        <TextBlock Text="按住 Shift 对称缩放" FontWeight="SemiBold"/>
+                        <TextBlock Text="右键拖动缩放时，按住 Shift 让对侧同步伸缩，保持窗口中心不动；松开恢复单侧缩放。应用自身的最小尺寸可能限制效果。"
+                                   TextWrapping="Wrap" FontSize="12" Margin="0,4,0,0" Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                    </StackPanel>
+                    <ui:ToggleSwitch x:Name="TsSymmetricResize" Grid.Column="1" VerticalAlignment="Center"
+                                     Checked="SymmetricResize_Changed" Unchecked="SymmetricResize_Changed"/>
+                </Grid>
+            </ui:Card>
             <!-- Resize mode -->
+            <ui:Card HorizontalAlignment="Stretch" Padding="18,16" Margin="0,0,0,12">
+                <Grid>
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                    <StackPanel Margin="0,0,12,0">
+                        <TextBlock Text="相邻窗口联动缩放" FontWeight="SemiBold"/>
+                        <TextBlock Text="窗口分区或快速网格摆放的同屏窗口，按住缩放修饰键，左键拖动公共边界提示柄即可联动缩放。悬停预览参与窗口；窗口内部保留右键缩放，Shift 退出本次联动。"
+                                   TextWrapping="Wrap" FontSize="12" Margin="0,4,0,0" Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+
+                    </StackPanel>
+                    <ui:ToggleSwitch x:Name="TsLinkedResize" Grid.Column="1" VerticalAlignment="Center"
+                                     Checked="LinkedResize_Changed" Unchecked="LinkedResize_Changed"/>
+                </Grid>
+            </ui:Card>
             <ui:Card HorizontalAlignment="Stretch" Padding="18,16" Margin="0,0,0,12">
                 <StackPanel>
                     <TextBlock Text="缩放方向识别"

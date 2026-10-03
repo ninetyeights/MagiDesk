@@ -19,6 +19,7 @@ internal static class DesktopTabGroups
         source.TabGroupId ??= Guid.NewGuid().ToString("N");
         var page = new DesktopBox { Name = name, FolderPath = folder, TabGroupId = source.TabGroupId,
             BgColorHex = source.BgColorHex, Transparency = source.Transparency, BackgroundBlur = source.BackgroundBlur,
+            BackgroundImagePath = source.BackgroundImagePath, BackgroundImageFit = source.BackgroundImageFit,
             ShowBorder = source.ShowBorder, RoundedCorners = source.RoundedCorners, ShowLabels = source.ShowLabels,
             Layout = source.Layout, Sort = source.Sort, SortDescending = source.SortDescending };
         CopyGeometry(source, page);

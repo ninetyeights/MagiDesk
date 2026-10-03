@@ -13,7 +13,11 @@ namespace MagiDesk.Features.Zones;
 [JsonPolymorphic(TypeDiscriminatorPropertyName = "$kind")]
 [JsonDerivedType(typeof(ZoneLeaf),  typeDiscriminator: "leaf")]
 [JsonDerivedType(typeof(SplitNode), typeDiscriminator: "split")]
-public abstract class LayoutNode { }
+public abstract class LayoutNode
+{
+    /// <summary>Explicit global-cut identity for the boundary after this child.</summary>
+    public string? FollowingCutGroup { get; set; }
+}
 
 public sealed class ZoneLeaf : LayoutNode
 {
@@ -84,6 +88,19 @@ public sealed class LayoutTree
         var f = new List<double>(n);
         for (int i = 0; i < n; i++) f.Add(1.0 / n);
         return f;
+    }
+
+    internal static LayoutTree CreateEditorGrid(int rows, int columns, bool global)
+    {
+        if (rows is < 1 or > 12 || columns is < 1 or > 12)
+            throw new ArgumentOutOfRangeException(nameof(rows), "Grid dimensions must be between 1 and 12.");
+        var tree = UniformGrid(rows, columns);
+        if (global)
+        {
+            for (int r = 1; r < rows; r++) tree.SplitGlobal((double)r / rows, SplitOrientation.Horizontal);
+            for (int c = 1; c < columns; c++) tree.SplitGlobal((double)c / columns, SplitOrientation.Vertical);
+        }
+        return tree;
     }
 
     /// <summary>
@@ -320,6 +337,163 @@ public sealed class LayoutTree
 
     // ---------------------------------------------------------- mutations
 
+    public static bool DividersLinked(SplitNode a, int ai, SplitNode b, int bi)
+        => ReferenceEquals(a, b) && ai == bi
+        || a.Orientation == b.Orientation
+        && a.Children[ai].FollowingCutGroup is string group
+        && group == b.Children[bi].FollowingCutGroup;
+
+    internal List<(SplitNode node, int index)> AlignedDividers(SplitNode source, int index)
+    {
+        double? target = null;
+        VisitBoundaries((node, i, position) =>
+        {
+            if (ReferenceEquals(node, source) && i == index) target = position;
+        });
+        var result = new List<(SplitNode, int)>();
+        if (target is not double line) return result;
+        VisitBoundaries((node, i, position) =>
+        {
+            if (node.Orientation == source.Orientation && Math.Abs(position - line) < 1e-6)
+                result.Add((node, i));
+        });
+        return result;
+    }
+
+    internal bool LinkAlignedDividers(SplitNode source, int index)
+    {
+        var aligned = AlignedDividers(source, index);
+        if (aligned.Count == 0) return false;
+        var group = Guid.NewGuid().ToString("N");
+        foreach (var (node, i) in aligned) node.Children[i].FollowingCutGroup = group;
+        return true;
+    }
+
+    /// <summary>
+    /// A grid's outer split can encode a whole column/row as one boundary.
+    /// Before a local drag, rotate that subtree through existing perpendicular
+    /// cuts so the segment under the pointer has its own split. Geometry and
+    /// leaf identities stay unchanged; never invent a cut through a leaf.
+    /// </summary>
+    internal (SplitNode node, int index)? PrepareLocalDivider(SplitNode source, int index, Point pointer)
+    {
+        if (source.Children[index].FollowingCutGroup is not null) return null;
+        Rect bounds = Rect.Empty;
+        EnumerateSplits(new Rect(0, 0, 1, 1), e =>
+        {
+            if (ReferenceEquals(e.Split, source)) bounds = e.Bounds;
+        });
+        if (bounds.IsEmpty) return null;
+        bool vertical = source.Orientation == SplitOrientation.Vertical;
+        double position = (vertical ? bounds.X : bounds.Y)
+            + source.Fractions.Take(index + 1).Sum() * (vertical ? bounds.Width : bounds.Height);
+        double along = vertical ? pointer.Y : pointer.X;
+        double oldSpan = vertical ? bounds.Height : bounds.Width;
+        var rects = new List<(int id, Rect r)>();
+        WalkLeaves(source, bounds, null, 0, e => rects.Add((e.Leaf.Id, e.Bounds)));
+        var candidate = BuildCanonical(rects, bounds,
+            vertical ? SplitOrientation.Horizontal : SplitOrientation.Vertical);
+        (SplitNode node, int index)? result = null;
+        WalkSplits(candidate, bounds, e =>
+        {
+            if (e.Split.Orientation != source.Orientation) return;
+            double lo = vertical ? e.Bounds.Y : e.Bounds.X;
+            double span = vertical ? e.Bounds.Height : e.Bounds.Width;
+            if (along < lo - 1e-6 || along > lo + span + 1e-6 || span >= oldSpan - 1e-6) return;
+            double start = vertical ? e.Bounds.X : e.Bounds.Y;
+            double extent = vertical ? e.Bounds.Width : e.Bounds.Height;
+            double sum = 0;
+            for (int i = 0; i < e.Split.Children.Count - 1; i++)
+            {
+                sum += e.Split.Fractions[i];
+                if (Math.Abs(start + sum * extent - position) < 1e-6)
+                    result = (e.Split, i);
+            }
+        });
+        if (result is null) return null;
+        var groups = CaptureGlobalCuts();
+        ReplaceInTree(source, candidate);
+        RestoreGlobalCuts(groups);
+        return result;
+    }
+
+    internal void UnlinkDividerGroup(SplitNode source, int index)
+    {
+        var group = source.Children[index].FollowingCutGroup;
+        if (group is null) return;
+        VisitBoundaries((node, i, _) =>
+        {
+            if (node.Children[i].FollowingCutGroup == group)
+                node.Children[i].FollowingCutGroup = null;
+        });
+    }
+
+    // Structural rebuilds must retain explicit cut identities on surviving edges.
+    private List<(SplitOrientation axis, double position, string group)> CaptureGlobalCuts()
+    {
+        var cuts = new List<(SplitOrientation, double, string)>();
+        VisitBoundaries((node, index, position) =>
+        {
+            if (node.Children[index].FollowingCutGroup is string group)
+                cuts.Add((node.Orientation, position, group));
+        });
+        return cuts;
+    }
+
+    private void RestoreGlobalCuts(List<(SplitOrientation axis, double position, string group)> cuts)
+        => VisitBoundaries((node, index, position) =>
+        {
+            foreach (var cut in cuts)
+                if (node.Orientation == cut.axis && Math.Abs(position - cut.position) < 1e-6)
+                {
+                    node.Children[index].FollowingCutGroup = cut.group;
+                    break;
+                }
+        });
+
+    private void VisitBoundaries(Action<SplitNode, int, double> visit)
+        => EnumerateSplits(new Rect(0, 0, 1, 1), e =>
+        {
+            bool vertical = e.Split.Orientation == SplitOrientation.Vertical;
+            double start = vertical ? e.Bounds.X : e.Bounds.Y;
+            double extent = vertical ? e.Bounds.Width : e.Bounds.Height;
+            double sum = 0;
+            for (int i = 0; i < e.Split.Children.Count - 1; i++)
+            {
+                sum += e.Split.Fractions[i];
+                visit(e.Split, i, start + sum * extent);
+            }
+        });
+
+    public void SplitGlobal(double position, SplitOrientation orientation)
+    {
+        var targets = new List<(int id, double fraction)>();
+        EnumerateLeaves(new Rect(0, 0, 1, 1), e =>
+        {
+            double start = orientation == SplitOrientation.Vertical ? e.Bounds.X : e.Bounds.Y;
+            double extent = orientation == SplitOrientation.Vertical ? e.Bounds.Width : e.Bounds.Height;
+            if (position > start + 1e-6 && position < start + extent - 1e-6)
+                targets.Add((e.Leaf.Id, (position - start) / extent));
+        });
+        foreach (var (id, fraction) in targets) SplitLeaf(id, orientation, fraction);
+
+        // Tag only this explicitly requested cut; never infer links during dragging.
+        string group = Guid.NewGuid().ToString("N");
+        EnumerateSplits(new Rect(0, 0, 1, 1), e =>
+        {
+            if (e.Split.Orientation != orientation) return;
+            double start = orientation == SplitOrientation.Vertical ? e.Bounds.X : e.Bounds.Y;
+            double extent = orientation == SplitOrientation.Vertical ? e.Bounds.Width : e.Bounds.Height;
+            double sum = 0;
+            for (int i = 0; i < e.Split.Children.Count - 1; i++)
+            {
+                sum += e.Split.Fractions[i];
+                if (Math.Abs(start + sum * extent - position) < 1e-6)
+                    e.Split.Children[i].FollowingCutGroup = group;
+            }
+        });
+    }
+
     /// <summary>
     /// Split the leaf with id <paramref name="leafId"/> at <paramref name="frac"/> (0-1)
     /// along the given orientation. If the leaf's parent already has the same
@@ -339,6 +513,8 @@ public sealed class LayoutTree
 
         if (parent is not null && parent.Orientation == dir)
         {
+            newLeaf.FollowingCutGroup = leaf.FollowingCutGroup;
+            leaf.FollowingCutGroup = null;
             double origFrac = parent.Fractions[idx];
             parent.Fractions[idx] = origFrac * frac;
             parent.Fractions.Insert(idx + 1, origFrac * (1 - frac));
@@ -353,6 +529,7 @@ public sealed class LayoutTree
                 Fractions   = new List<double>     { frac, 1 - frac },
             };
             ReplaceInTree(leaf, wrap);
+            leaf.FollowingCutGroup = null;
         }
         return newId;
     }
@@ -426,7 +603,9 @@ public sealed class LayoutTree
 
         try
         {
+            var globalCuts = CaptureGlobalCuts();
             Root = BuildFromRects(post, new Rect(0, 0, 1, 1));
+            RestoreGlobalCuts(globalCuts);
         }
         catch (InvalidOperationException ex)
         {
@@ -590,41 +769,145 @@ public sealed class LayoutTree
     }
 
     /// <summary>
-    /// Evenly distribute fractions among selected leaves — they must share
-    /// the same direct parent AND be contiguous. Sum of their fractions is
-    /// preserved, just redistributed equally.
+    /// Evenly distribute a rectangular selection organized in complete rows
+    /// or columns, including staggered boundaries across different parents.
+    /// The selection's outer bounds and all unselected rectangles are preserved.
     /// </summary>
     public bool EvenDistribute(IReadOnlyCollection<int> leafIds)
     {
-        if (leafIds.Count < 2) return false;
-
-        SplitNode? parent = null;
-        var indices = new List<int>(leafIds.Count);
-        foreach (var id in leafIds)
+        if (TryBuildEvenSelection(leafIds, out var rebuilt))
         {
-            var (p, i) = FindParent(id);
-            if (p is null || i < 0) return false;
-            if (parent is null) parent = p;
-            else if (parent != p) return false;
-            indices.Add(i);
+            var groups = CaptureGlobalCuts();
+            Root = rebuilt!;
+            RestoreGlobalCuts(groups);
+            return true;
         }
-        if (parent is null) return false;
+        return false;
+    }
 
-        indices.Sort();
-        for (int k = 1; k < indices.Count; k++)
-            if (indices[k] != indices[k - 1] + 1) return false;
+    internal bool CanEvenDistribute(IReadOnlyCollection<int> leafIds)
+        => TryBuildEvenSelection(leafIds, out _);
 
-        double sum = 0;
-        foreach (var i in indices) sum += parent.Fractions[i];
-        double each = sum / indices.Count;
-        foreach (var i in indices) parent.Fractions[i] = each;
-        return true;
+    private bool TryBuildEvenSelection(IReadOnlyCollection<int> leafIds, out LayoutNode? result)
+    {
+        result = null;
+        var ids = leafIds.ToHashSet();
+        if (ids.Count < 2) return false;
+        var all = new List<(int id, Rect rect)>();
+        EnumerateLeaves(new Rect(0, 0, 1, 1), e => all.Add((e.Leaf.Id, e.Bounds)));
+        var selected = all.Where(e => ids.Contains(e.id)).ToList();
+        if (selected.Count != ids.Count) return false;
+        const double eps = 1e-6;
+        foreach (bool transpose in new[] { false, true })
+        {
+            var cells = selected.Select(e => (e.id, r: transpose
+                ? new Rect(e.rect.Y, e.rect.X, e.rect.Height, e.rect.Width) : e.rect))
+                .OrderBy(e => e.r.Y).ThenBy(e => e.r.X).ToList();
+            double left = cells.Min(e => e.r.Left), right = cells.Max(e => e.r.Right);
+            double top = cells.Min(e => e.r.Top), bottom = cells.Max(e => e.r.Bottom);
+            var rows = new List<List<(int id, Rect r)>>();
+            bool valid = true;
+            foreach (var cell in cells)
+            {
+                if (rows.Count == 0 || Math.Abs(rows[^1][0].r.Top - cell.r.Top) > eps)
+                    rows.Add(new());
+                if (rows[^1].Count > 0 && Math.Abs(rows[^1][0].r.Bottom - cell.r.Bottom) > eps) { valid = false; break; }
+                rows[^1].Add(cell);
+            }
+            double nextY = top;
+            foreach (var row in rows)
+            {
+                double nextX = left;
+                if (row.Count != rows[0].Count || Math.Abs(row[0].r.Top - nextY) > eps) valid = false;
+                foreach (var cell in row)
+                {
+                    if (Math.Abs(cell.r.Left - nextX) > eps) valid = false;
+                    nextX = cell.r.Right;
+                }
+                if (Math.Abs(nextX - right) > eps) valid = false;
+                nextY = row[0].r.Bottom;
+            }
+            if (!valid || Math.Abs(nextY - bottom) > eps) continue;
+            var replacements = new Dictionary<int, Rect>();
+            double width = (right - left) / rows[0].Count, height = (bottom - top) / rows.Count;
+            for (int y = 0; y < rows.Count; y++)
+                for (int x = 0; x < rows[y].Count; x++)
+                {
+                    var r = new Rect(left + x * width, top + y * height, width, height);
+                    replacements[rows[y][x].id] = transpose ? new Rect(r.Y, r.X, r.Height, r.Width) : r;
+                }
+            var post = all.Select(e => (e.id, rect: replacements.GetValueOrDefault(e.id, e.rect))).ToList();
+            try { result = BuildFromRects(post, new Rect(0, 0, 1, 1)); return true; }
+            catch (InvalidOperationException) { }
+        }
+        return false;
     }
 
     // ---------------------------------------------------------- helpers
 
+    private (List<double> xs, List<double> ys)? GridAxes()
+    {
+        const double epsilon = 1e-6;
+        var leaves = new List<Rect>();
+        EnumerateLeaves(new Rect(0, 0, 1, 1), e => leaves.Add(e.Bounds));
+        static List<double> Edges(IEnumerable<double> values)
+        {
+            var result = new List<double>();
+            foreach (double value in values.OrderBy(v => v))
+                if (result.Count == 0 || value - result[^1] > epsilon) result.Add(value);
+            return result;
+        }
+        var xs = Edges(leaves.SelectMany(r => new[] { r.Left, r.Right }));
+        var ys = Edges(leaves.SelectMany(r => new[] { r.Top, r.Bottom }));
+        if (xs.Count < 2 || ys.Count < 2 || (long)(xs.Count - 1) * (ys.Count - 1) != leaves.Count)
+            return null;
+        var cells = new HashSet<(int, int)>();
+        foreach (var r in leaves)
+        {
+            int x = xs.FindIndex(v => Math.Abs(v - r.Left) < epsilon);
+            int y = ys.FindIndex(v => Math.Abs(v - r.Top) < epsilon);
+            if (x < 0 || y < 0 || x + 1 >= xs.Count || y + 1 >= ys.Count
+                || Math.Abs(xs[x + 1] - r.Right) >= epsilon
+                || Math.Abs(ys[y + 1] - r.Bottom) >= epsilon || !cells.Add((x, y))) return null;
+        }
+        return (xs, ys);
+    }
+
+    internal bool IsRectangularGrid() => GridAxes() is not null;
+
+    internal bool EvenDistributeGrid()
+    {
+        if (GridAxes() is not { } axes) return false;
+        // Calculate against the original geometry, then update in one pass.
+        // Keep the tree, leaf IDs and explicit global/local linkage intact.
+        var changes = new List<(SplitNode node, List<double> fractions)>();
+        EnumerateSplits(new Rect(0, 0, 1, 1), e =>
+        {
+            bool vertical = e.Split.Orientation == SplitOrientation.Vertical;
+            var edges = vertical ? axes.xs : axes.ys;
+            double start = vertical ? e.Bounds.X : e.Bounds.Y;
+            double extent = vertical ? e.Bounds.Width : e.Bounds.Height;
+            int first = edges.FindIndex(v => Math.Abs(v - start) < 1e-6);
+            int last = edges.FindIndex(v => Math.Abs(v - start - extent) < 1e-6);
+            int previous = first;
+            double sum = 0;
+            var fractions = new List<double>();
+            foreach (double fraction in e.Split.Fractions)
+            {
+                sum += fraction;
+                int next = edges.FindIndex(v => Math.Abs(v - start - sum * extent) < 1e-6);
+                fractions.Add((double)(next - previous) / (last - first));
+                previous = next;
+            }
+            changes.Add((e.Split, fractions));
+        });
+        foreach (var (node, fractions) in changes) node.Fractions = fractions;
+        return true;
+    }
+
     private void ReplaceInTree(LayoutNode oldNode, LayoutNode newNode)
     {
+        newNode.FollowingCutGroup = oldNode.FollowingCutGroup;
         if (ReferenceEquals(Root, oldNode)) { Root = newNode; return; }
         var parent = FindParentOf(Root, oldNode);
         if (parent is null) return;
@@ -649,6 +932,7 @@ public sealed class LayoutTree
         while (split.Children.Count == 1)
         {
             var only = split.Children[0];
+            only.FollowingCutGroup = split.FollowingCutGroup;
             if (ReferenceEquals(Root, split))
             {
                 Root = only;

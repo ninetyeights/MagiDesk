@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "parameters": "--include-transitive",
+  "projects": [
+    {
+      "path": "C:/Users/Chester/source/repos/MagiDesk/MagiDesk.Tests/MagiDesk.Tests.csproj",
+      "frameworks": [
+        {
+          "framework": "net10.0-windows",
+          "transitivePackages": [
+            {
+              "id": "System.Management",
+              "resolvedVersion": "9.0.20"
+            },
+            {
+              "id": "WPF-UI",
+              "resolvedVersion": "4.3.0"
+            },
+            {
+              "id": "WPF-UI.Abstractions",
+              "resolvedVersion": "4.3.0"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "C:/Users/Chester/source/repos/MagiDesk/MagiDesk/MagiDesk.csproj",
+      "frameworks": [
+        {
+          "framework": "net10.0-windows",
+          "topLevelPackages": [
+            {
+              "id": "System.Management",
+              "requestedVersion": "9.0.20",
+              "resolvedVersion": "9.0.20"
+            },
+            {
+              "id": "WPF-UI",
+              "requestedVersion": "4.3.0",
+              "resolvedVersion": "4.3.0"
+            }
+          ],
+          "transitivePackages": [
+            {
+              "id": "WPF-UI.Abstractions",
+              "resolvedVersion": "4.3.0"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

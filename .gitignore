@@ -57,3 +57,11 @@ Thumbs.db
 # Local backups (not part of the project)
 _cellmap_backup/
 tree_layout_backup.zip
+
+# Local credentials and signing material (examples contain names only).
+.env
+.env.*
+!.env.example
+*.pfx
+*.p12
+*.key

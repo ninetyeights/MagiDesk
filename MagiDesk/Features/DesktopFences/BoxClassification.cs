@@ -22,6 +22,7 @@ internal static class BoxClassification
     {
         if (!CanReorganize(boxes, source)) throw new InvalidOperationException("仅规则分类盒子可以取消分类。");
         var pages = DesktopTabGroups.Members(boxes, source);
+        foreach (var reference in pages.SelectMany(p => p.MemberReferences)) reference.KeepInCategory = false;
         source.Members = pages.SelectMany(p => p.Members).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         source.MemberReferences = pages.SelectMany(p => p.MemberReferences).ToList();
         source.Name = pages.Select(p => p.ClassificationOriginalName).FirstOrDefault(n => !string.IsNullOrWhiteSpace(n)) ?? "盒子";
@@ -69,8 +70,26 @@ internal static class BoxClassification
         if (!page.IsRuleCategory) return items;
         var pages = DesktopTabGroups.Members(boxes, page).Where(p => p.IsRuleCategory).ToArray();
         var fallback = pages.FirstOrDefault(p => p.CategoryRule is null);
-        return items.Where(item => (pages.FirstOrDefault(p => p.CategoryRule is { } rule && Matches(rule, item, now))
+        var manual = new Dictionary<string, DesktopBox>(StringComparer.OrdinalIgnoreCase);
+        foreach (var owner in pages)
+        foreach (var reference in owner.MemberReferences.Where(r => r.KeepInCategory && r.MissingSinceUtc is null))
+            manual.TryAdd(reference.Path, owner);
+        return items.Where(item => (manual.GetValueOrDefault(item.Path)
+            ?? pages.FirstOrDefault(p => p.CategoryRule is { } rule && Matches(rule, item, now))
             ?? fallback)?.Id == page.Id).ToArray();
+    }
+
+    internal static void KeepCreatedItem(DesktopBox page, string path)
+    {
+        if (!page.IsRuleCategory) return;
+        var reference = page.MemberReferences.FirstOrDefault(r => string.Equals(r.Path, path, StringComparison.OrdinalIgnoreCase));
+        if (reference is null)
+        {
+            reference = new DesktopMemberReference { Path = path };
+            page.MemberReferences.Add(reference);
+        }
+        reference.KeepInCategory = true;
+        reference.MissingSinceUtc = null;
     }
 
     internal static DesktopBox Apply(List<DesktopBox> boxes, DesktopBox source, IReadOnlyList<BoxClassificationRule> rules)

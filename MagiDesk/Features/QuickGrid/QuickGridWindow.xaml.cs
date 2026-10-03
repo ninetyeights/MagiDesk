@@ -57,6 +57,7 @@ public partial class QuickGridWindow : Window
     internal QuickGridWindow(IntPtr targetHwnd)
     {
         InitializeComponent();
+        MagiDesk.Native.AuxiliaryWindow.Attach(this);
         WindowChrome.SetWindowChrome(this, new WindowChrome
         {
             CaptionHeight = 0,
@@ -820,8 +821,10 @@ public partial class QuickGridWindow : Window
             && NativeMethods.GetWindowRect(hwnd, out var pre)
             && !SnapMemory.Contains(hwnd))
         {
-            SnapMemory.Remember(hwnd, pre);
+            SnapMemory.Remember(hwnd, pre, quickGrid: true);
         }
+
+        if (rememberForRestore) SnapMemory.SetSource(hwnd, quickGrid: true);
 
         // Delegate to the shared snap utility — it compensates for Win10+
         // invisible DWM resize borders (~7-8 px on left/right/bottom) so the

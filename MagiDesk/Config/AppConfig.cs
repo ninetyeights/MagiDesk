@@ -28,6 +28,7 @@ public sealed class AppConfig
 {
     // ---- Window Drag tool ------------------------------------------------
     public bool        WindowDragEnabled { get; set; } = true;
+    public bool AutomaticUpdateChecks { get; set; } = false;
     public ResizeMode  ResizeMode        { get; set; } = ResizeMode.TwoByTwoCorners;
     /// <summary>Legacy single-modifier field — superseded by MoveModMask /
     /// ResizeModMask. Kept for config back-compat; migration fans it out to
@@ -38,9 +39,11 @@ public sealed class AppConfig
     public uint        MoveModMask       { get; set; } = 1; // Alt
     /// <summary>Same bitmask for the right-drag resize action.</summary>
     public uint        ResizeModMask     { get; set; } = 1; // Alt
+    public bool ResizeSymmetricWithShift { get; set; } = true;
+    public bool LinkedWindowResizeEnabled { get; set; } = false;
 
     // ---- Zones (FancyZones-style) ----------------------------------------
-    public bool    ZonesEnabled        { get; set; } = true;
+    public bool    ZonesEnabled        { get; set; } = false;
     /// <summary>Default rows/columns for a brand-new layout in the editor.</summary>
     public int     ZonesRows           { get; set; } = 2;
     public int     ZonesColumns        { get; set; } = 2;
@@ -85,7 +88,7 @@ public sealed class AppConfig
     public string? SelectedMonitorId { get; set; }
 
     // ---- Browser badges (Chrome profile indicators) ----------------------
-    public bool BrowserBadgeEnabled { get; set; } = true;
+    public bool BrowserBadgeEnabled { get; set; } = false;
     /// <summary>Badge pill height in DIPs. Width is auto (avatar + name).</summary>
     public int  BrowserBadgeHeight  { get; set; } = 26;
     /// <summary>Show the profile name next to the avatar. Off = avatar-only pill.</summary>
@@ -103,17 +106,30 @@ public sealed class AppConfig
     public double BrowserBadgeOffsetTop   { get; set; } = 42;
     /// <summary>When true, badges become click-through-disabled and draggable
     /// so the user can reposition them. Dragging saves the new offsets.</summary>
+    [JsonIgnore] // Position adjustment is a session, never restored on startup.
     public bool   BrowserBadgeUnlocked    { get; set; } = false;
+    public Dictionary<string, BrowserBadgePosition> BrowserBadgePositions { get; set; } = new();
+    [JsonIgnore]
+    public string? BrowserBadgePositionScope { get; set; }
     /// <summary>Per-profile overrides keyed by Chrome profile directory
     /// (e.g. "Default", "Profile 1"). Profiles not in the map use defaults.</summary>
     public Dictionary<string, BrowserProfileSettings> BrowserProfiles { get; set; } = new();
 
     // ---- Profile dock (taskbar-like floating strip of Chrome profiles) ----
-    public bool   BrowserDockEnabled    { get; set; } = true;
+    public bool   BrowserDockEnabled    { get; set; } = false;
     /// <summary>Floating (drag anywhere, free overlay) vs AppBar (taskbar-style
     /// strip pinned to the top edge that reserves screen space). See
     /// <see cref="DockMode"/>.</summary>
     public DockMode BrowserDockMode     { get; set; } = DockMode.Floating;
+    public int DockFloatingEdge { get; set; } = 2; // 0 free, 1 top, 2 bottom
+    public int DockFloatingAlignment { get; set; } = 1; // left, center, right
+    public int DockFloatingGap { get; set; } = 8; // DIPs
+    public bool DockFloatingPositionLocked { get; set; }
+    public bool DockFloatingAutoHide { get; set; }
+    public bool DockRoundedCorners { get; set; }
+    public int? DockFloatingDisplayMode { get; set; } // 0 smart, 1 auto-hide, 2 always; null migrates old auto-hide.
+    public int DockFloatingHideDelayMs { get; set; } = 150;
+    public string? DockFloatingAnchorMonitorId { get; set; }
     /// <summary>Dock chrome colour scheme: follow Windows (live), or force
     /// light / dark. See <see cref="DockTheme"/>.</summary>
     public DockTheme BrowserDockTheme   { get; set; } = DockTheme.System;
@@ -121,6 +137,8 @@ public sealed class AppConfig
     public Dictionary<string, string> BrowserLaunchArguments { get; set; } = new();
     /// <summary>Size (DIPs) of each avatar button in the dock.</summary>
     public int    BrowserDockButtonSize { get; set; } = 36;
+    public bool DockAdaptIconSize { get; set; }
+    public Dictionary<string, int> DockMonitorIconSizes { get; set; } = new();
     /// <summary>Dock window position in DIPs. -1 = not yet positioned; the
     /// service will center it on the primary work area. Only used by the
     /// legacy single-monitor / "primary (auto)" path — explicit monitor
@@ -146,12 +164,19 @@ public sealed class AppConfig
     /// contiguously on the dock with a small gap separating groups.
     /// Profiles not in any group appear after all groups.</summary>
     public List<BrowserDockGroup> BrowserDockGroups { get; set; } = new();
+    public List<DockApplication> DockApplications { get; set; } = new();
+    public List<DockNavigationGroup> DockNavigationGroups { get; set; } = new();
+    public string? ActiveDockCollectionId { get; set; }
+    public bool DockCollectionsInitialized { get; set; }
+    public bool DockShowRunningApplications { get; set; } = true;
+    public int DockOverflow { get; set; } // 0 scroll, 1 wrap; legacy 2 falls back to scroll
+    public int DockMaxWidthPercent { get; set; } = 85;
     /// <summary>Visual style used between adjacent dock groups.</summary>
     public DockGroupSeparator BrowserDockSeparator { get; set; } = DockGroupSeparator.Gap;
     /// <summary>When true, profiles that aren't in any named group are
     /// hidden from the dock. Useful if the user has many profiles and only
     /// cares about the ones they've explicitly curated.</summary>
-    public bool BrowserDockHideUngrouped { get; set; } = false;
+    public bool BrowserDockHideUngrouped { get; set; } = true;
     /// <summary>Explicit display order of ungrouped profiles. Profiles not in
     /// this list fall through to catalog order at the end. Populated lazily on
     /// first drag-drop reorder of an ungrouped profile so existing setups
@@ -166,11 +191,14 @@ public sealed class AppConfig
     /// <summary>Show desktop boxes without changing system desktop icons.</summary>
     public bool DesktopFencesEnabled { get; set; } = false;
     public bool DesktopUnifiedSurface { get; set; } = false;
+    public bool DesktopDefaultBoxInitialized { get; set; }
+    public bool DesktopInitialClassificationInitialized { get; set; }
+    public string? DesktopInitialClassificationBoxId { get; set; }
     public Dictionary<string, DesktopIconPosition> DesktopIconPositions { get; set; } = new();
     public bool DesktopIconPositionsImported { get; set; }
     public bool DesktopMultiMonitorImported { get; set; }
     public uint DesktopFencesHotkeyMods { get; set; } = 2 | 4;
-    public uint DesktopFencesHotkeyVk { get; set; } = 0x46; // Ctrl+Shift+F; zero disables.
+    public uint DesktopFencesHotkeyVk { get; set; } = 0x44; // Ctrl+Shift+D; zero disables.
     /// <summary>User's fence boxes. One is flagged unsorted (the catch-all).
     /// The service seeds the unsorted box on first enable.</summary>
     public List<DesktopBox> DesktopBoxes { get; set; } = new();
@@ -183,7 +211,7 @@ public sealed class AppConfig
     public bool AutoStartEnabled { get; set; } = false;
 
     // ---- Quick Grid (ad-hoc rows×cols picker via hotkey) -----------------
-    public bool QuickGridEnabled          { get; set; } = true;
+    public bool QuickGridEnabled          { get; set; } = false;
     public bool QuickGridPositionPreview { get; set; } = false;
     public bool QuickGridRestoreOnDrag    { get; set; } = true;
     /// <summary>Hotkey as RegisterHotKey modifiers bitmask. ALT=1, CTRL=2, SHIFT=4, WIN=8.</summary>
@@ -201,7 +229,7 @@ public sealed class AppConfig
     // ---- Edge snap (magnetic snapping during Alt-drag move) --------------
     /// <summary>Master switch for live edge snapping while moving a window with
     /// the Alt-drag (WindowDrag) modifier held.</summary>
-    public bool EdgeSnapEnabled        { get; set; } = true;
+    public bool EdgeSnapEnabled        { get; set; } = false;
     /// <summary>Snap distance in physical pixels: an edge within this many px of
     /// a target line jumps to align with it.</summary>
     public int  EdgeSnapBand           { get; set; } = 12;
@@ -225,13 +253,6 @@ public sealed class AppConfig
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
         "MagiDesk",
         "config.json");
-    private static readonly string BackupPath = ConfigPath + ".bak";
-    private static readonly string TempPath   = ConfigPath + ".tmp";
-    private static readonly string BackupDir  = Path.Combine(
-        Path.GetDirectoryName(ConfigPath)!, "backups");
-    /// <summary>How many rolling daily snapshots to keep in <see cref="BackupDir"/>.</summary>
-    private const int KeepDailyBackups = 7;
-
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
         WriteIndented = true,
@@ -241,46 +262,29 @@ public sealed class AppConfig
         Converters = { new JsonStringEnumConverter() },
     };
 
+    public static string? RecoveryNotice { get; private set; }
+    public static string? LastSaveError { get; private set; }
+    public static event Action<string>? SaveFailed;
+    private static readonly object SaveGate = new();
     private static AppConfig _current = Load();
     public static AppConfig Current => _current;
 
     private static AppConfig Load()
     {
-        var cfg = TryLoad(ConfigPath);
-        if (cfg is not null) return cfg;
-
-        // Primary unreadable (empty, half-written, or otherwise corrupt).
-        // Quarantine it BEFORE returning so the next Save() doesn't silently
-        // overwrite the evidence — that's exactly how we lost data once.
-        QuarantineCorrupt(ConfigPath);
-
-        cfg = TryLoad(BackupPath);
-        if (cfg is not null)
-        {
-            try { File.Copy(BackupPath, ConfigPath, overwrite: true); }
-            catch (Exception ex) { Log($"LOAD restore from .bak copy failed: {ex.Message}"); }
-            Log("LOAD recovered from .bak");
-            return cfg;
-        }
-
-        Log("LOAD falling back to defaults — neither config.json nor .bak usable");
-        return new AppConfig();
+        var cfg = MagiDesk.Infrastructure.ConfigStorage.Load(ConfigPath, Parse, out var notice);
+        RecoveryNotice = notice;
+        return cfg ?? new AppConfig();
     }
 
-    private static AppConfig? TryLoad(string path)
+    private static AppConfig? Parse(string json)
     {
-        try
-        {
-            if (!File.Exists(path)) { Log($"LOAD no file at {Path.GetFileName(path)}"); return null; }
-            var json = File.ReadAllText(path);
-            if (string.IsNullOrWhiteSpace(json)) { Log($"LOAD empty {Path.GetFileName(path)}"); return null; }
-            var cfg = JsonSerializer.Deserialize<AppConfig>(json, JsonOpts);
-            if (cfg is null) { Log($"LOAD null after deserialize {Path.GetFileName(path)}"); return null; }
-            MigrateBrowserKeys(cfg);
-            Log($"LOAD ok {Path.GetFileName(path)} Layouts={cfg.Layouts.Count} Assignments={cfg.MonitorAssignments.Count}");
-            return cfg;
-        }
-        catch (Exception ex) { Log($"LOAD failed {Path.GetFileName(path)}: {ex.Message}"); return null; }
+        var cfg = JsonSerializer.Deserialize<AppConfig>(json, JsonOpts);
+        if (cfg is null) return null;
+        using (var document = JsonDocument.Parse(json))
+            if (!document.RootElement.TryGetProperty(nameof(DockFloatingEdge), out _)) cfg.DockFloatingEdge = 0;
+        MigrateBrowserKeys(cfg);
+        MagiDesk.Features.ProfileDock.DockCollections.Ensure(cfg);
+        return cfg;
     }
 
     /// <summary>
@@ -325,72 +329,31 @@ public sealed class AppConfig
         if (changed) Log("migrated browser-badge config keys to browser-qualified form");
     }
 
-    private static void QuarantineCorrupt(string path)
-    {
-        try
-        {
-            if (!File.Exists(path)) return;
-            var dest = path + ".broken-" + DateTime.Now.ToString("yyyyMMdd-HHmmss");
-            File.Move(path, dest);
-            Log($"quarantined corrupt config → {Path.GetFileName(dest)}");
-        }
-        catch (Exception ex) { Log($"quarantine failed: {ex.Message}"); }
-    }
+    public void Save() => TrySave();
 
-    public void Save()
+    public bool TrySave()
     {
-        try
+        string? error;
+        lock (SaveGate)
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(ConfigPath)!);
-            var json = JsonSerializer.Serialize(this, JsonOpts);
-            // Atomic write: serialize into .tmp, then File.Replace swaps it
-            // into place and moves the previous good copy into .bak. If the
-            // process dies mid-write the half-written file is .tmp (ignored
-            // by Load), not config.json. The .bak file lets a future Load
-            // recover from a corrupted primary — see Load() above.
-            File.WriteAllText(TempPath, json);
-            if (File.Exists(ConfigPath))
-                File.Replace(TempPath, ConfigPath, BackupPath, ignoreMetadataErrors: true);
-            else
-                File.Move(TempPath, ConfigPath);
-            Log($"SAVE ok Layouts={Layouts.Count} bytes={json.Length}");
-            RollDailyBackup();
-        }
-        catch (Exception ex) { Log($"SAVE failed: {ex}"); }
-        try { Changed?.Invoke(); } catch { }
-    }
-
-    /// <summary>
-    /// On the first Save of each calendar day, copy the just-written config
-    /// into <c>backups/config-YYYYMMDD.json</c> and prune snapshots beyond
-    /// <see cref="KeepDailyBackups"/>. Fast on subsequent Save() calls — just
-    /// a File.Exists check — so the high-frequency settings UI doesn't churn
-    /// disk. Independent of <c>.bak</c>, which only ever holds the previous
-    /// version.
-    /// </summary>
-    private static void RollDailyBackup()
-    {
-        try
-        {
-            var today     = DateTime.Now.ToString("yyyyMMdd");
-            var todayPath = Path.Combine(BackupDir, $"config-{today}.json");
-            if (File.Exists(todayPath)) return;
-            Directory.CreateDirectory(BackupDir);
-            File.Copy(ConfigPath, todayPath);
-            Log($"daily backup → config-{today}.json");
-
-            // Filenames sort lexicographically by date thanks to yyyyMMdd, so
-            // descending == newest first; keep the top N, delete the rest.
-            var stale = Directory.GetFiles(BackupDir, "config-*.json")
-                                 .OrderByDescending(f => f)
-                                 .Skip(KeepDailyBackups);
-            foreach (var f in stale)
+            try
             {
-                try { File.Delete(f); Log($"pruned old backup {Path.GetFileName(f)}"); }
-                catch (Exception ex) { Log($"prune {Path.GetFileName(f)} failed: {ex.Message}"); }
+                var json = JsonSerializer.Serialize(this, JsonOpts);
+                MagiDesk.Infrastructure.ConfigStorage.TrySave(ConfigPath, json, out error);
             }
+            catch (Exception ex) { error = ex.Message; }
+            LastSaveError = error;
         }
-        catch (Exception ex) { Log($"daily backup failed: {ex.Message}"); }
+        if (error is not null)
+        {
+            Log($"SAVE failed: {error}");
+            try { SaveFailed?.Invoke(error); } catch { }
+            return false;
+        }
+        // Isolate subscribers: one faulty service must not suppress all others.
+        foreach (var handler in Changed?.GetInvocationList() ?? Array.Empty<Delegate>())
+            try { ((Action)handler)(); } catch (Exception ex) { Log($"Changed handler failed: {ex}"); }
+        return true;
     }
 
     /// <summary>Fired after a successful save so any open settings page can

@@ -43,6 +43,8 @@ public sealed class DesktopBox
     // ---- appearance ----
     /// <summary>Box tint color as "RRGGBB". Null = the default gray.</summary>
     public string? BgColorHex { get; set; }
+    public string? BackgroundImagePath { get; set; }
+    public bool BackgroundImageFit { get; set; }
     /// <summary>Background transparency, 0 (opaque) .. 90 (very see-through).</summary>
     public int  Transparency { get; set; } = 60;
     /// <summary>System background blur: 0 = off, positive = on (including legacy value 2).</summary>

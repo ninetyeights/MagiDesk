@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "dependencies": {
+    "net10.0-windows7.0": {
+      "System.Management": {
+        "type": "Transitive",
+        "resolved": "9.0.20",
+        "contentHash": "Tt61QSWAwlwdr2M2QpoFN4+lA2BRnYavkZWapoauAX9Niz+lXMvI8nXCfXTGSXpxz/l9jwatYjwnyuYKcaLR1w=="
+      },
+      "WPF-UI": {
+        "type": "Transitive",
+        "resolved": "4.3.0",
+        "contentHash": "SIHhc8lIrhEQ/1cLFZN6Dtf8cqsLm4myBULj9obnacd9TyDs2vizhKYzRzTlcPEcnzb3L4EstvPN3M6kcXbJCA==",
+        "dependencies": {
+          "WPF-UI.Abstractions": "4.3.0"
+        }
+      },
+      "WPF-UI.Abstractions": {
+        "type": "Transitive",
+        "resolved": "4.3.0",
+        "contentHash": "7Kj9DmCCo4SOCd1jAiw4+EcMFP2nR8rLLvitAYzVtzbWToTsodkbie24+8x9C4LDLxkopWEUGX62szqqNy7oeg=="
+      },
+      "magidesk": {
+        "type": "Project",
+        "dependencies": {
+          "System.Management": "[9.0.20, )",
+          "WPF-UI": "[4.3.0, )"
+        }
+      }
+    },
+    "net10.0-windows7.0/win-arm64": {
+      "System.Management": {
+        "type": "Transitive",
+        "resolved": "9.0.20",
+        "contentHash": "Tt61QSWAwlwdr2M2QpoFN4+lA2BRnYavkZWapoauAX9Niz+lXMvI8nXCfXTGSXpxz/l9jwatYjwnyuYKcaLR1w=="
+      }
+    },
+    "net10.0-windows7.0/win-x64": {
+      "System.Management": {
+        "type": "Transitive",
+        "resolved": "9.0.20",
+        "contentHash": "Tt61QSWAwlwdr2M2QpoFN4+lA2BRnYavkZWapoauAX9Niz+lXMvI8nXCfXTGSXpxz/l9jwatYjwnyuYKcaLR1w=="
+      }
+    }
+  }
+}

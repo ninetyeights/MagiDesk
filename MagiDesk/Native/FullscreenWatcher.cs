@@ -34,13 +34,15 @@ internal static class FullscreenWatcher
     /// <summary>Fires whenever any monitor's fullscreen state flips, on the UI
     /// thread. Carries no payload — consumers re-query their own monitor.</summary>
     public static event Action? Changed;
+    // Raw foreground/geometry events, independently of fullscreen state changes.
+    public static event Action? ForegroundGeometryChanged;
 
     public static void EnsureStarted()
     {
         if (_started) return;
         _started = true;
 
-        _fgProc = (_, _, _, _, _, _, _) => Recheck();
+        _fgProc = (_, _, _, _, _, _, _) => { ForegroundGeometryChanged?.Invoke(); Recheck(); };
         _fgHook = NativeMethods.SetWinEventHook(
             NativeConstants.EVENT_SYSTEM_FOREGROUND, NativeConstants.EVENT_SYSTEM_FOREGROUND,
             IntPtr.Zero, _fgProc, 0, 0, NativeConstants.WINEVENT_OUTOFCONTEXT);
@@ -52,6 +54,7 @@ internal static class FullscreenWatcher
             // itself (an F11 toggle resizes/restyles it without changing focus).
             if (idObject != NativeConstants.OBJID_WINDOW) return;
             if (hwnd != NativeMethods.GetForegroundWindow()) return;
+            ForegroundGeometryChanged?.Invoke();
             Recheck();
         };
         _locHook = NativeMethods.SetWinEventHook(

@@ -30,6 +30,7 @@ internal static class TextPrompt
         string? result = null;
         okBtn.Click += (_, _) => { result = input.Text; dlg.DialogResult = true; };
         input.Loaded += (_, _) => { input.Focus(); input.SelectAll(); };
+        MagiDesk.Native.AuxiliaryWindow.Attach(dlg);
         return dlg.ShowDialog() == true && !string.IsNullOrWhiteSpace(result) ? result : null;
     }
 }

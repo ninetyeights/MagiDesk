@@ -6,12 +6,82 @@ using MagiDesk.Config;
 using MagiDesk.Features.BrowserBadges;
 using MagiDesk.Features.DesktopFences;
 using MagiDesk.Infrastructure;
+using MagiDesk.Features.ProfileDock;
 
 namespace MagiDesk.Tests;
 
 /// <summary>No Application, HWND, hooks, input injection or user-config writes.</summary>
 internal static class HeadlessTests
 {
+    private static void BrowserBadgePositions()
+    {
+        var cfg = new AppConfig { BrowserBadgeOffsetRight = 25, BrowserBadgeOffsetTop = 35 };
+        Check(BrowserBadgePosition.Resolve(cfg, "edge") == new BrowserBadgePosition(25, 35), "legacy position inherited");
+        cfg.BrowserBadgeUnlocked = true;
+        cfg.BrowserBadgePositionScope = "edge";
+        Check(BrowserBadgePosition.CanAdjust(cfg, "edge") && !BrowserBadgePosition.CanAdjust(cfg, "chrome"), "adjustment scope isolated");
+        string before = BadgeSettingsSnapshot.Capture(cfg);
+        BrowserBadgePosition.Store(cfg, "edge", 50, 60);
+        Check(before != BadgeSettingsSnapshot.Capture(cfg), "position changes invalidate badge snapshot");
+        Check(BrowserBadgePosition.Resolve(cfg, "chrome") == new BrowserBadgePosition(25, 35), "other browsers unaffected");
+        cfg.BrowserBadgePositionScope = null;
+        Check(!BrowserBadgePosition.CanAdjust(cfg, "edge") && BrowserBadgePosition.CanAdjust(cfg, "chrome"), "default adjustment excludes overrides");
+        BrowserBadgePosition.Store(cfg, "chrome", 70, 80);
+        Check(BrowserBadgePosition.Resolve(cfg, "edge") == new BrowserBadgePosition(50, 60), "default changes preserve override");
+        var restored = System.Text.Json.JsonSerializer.Deserialize<AppConfig>(System.Text.Json.JsonSerializer.Serialize(cfg))!;
+        Check(!restored.BrowserBadgeUnlocked && restored.BrowserBadgePositionScope is null, "editing state never persists");
+        Check(BrowserBadgePosition.Resolve(restored, "edge") == new BrowserBadgePosition(50, 60), "override persists");
+        restored.BrowserBadgePositions.Remove("edge");
+        Check(BrowserBadgePosition.Resolve(restored, "edge") == new BrowserBadgePosition(70, 80), "reset inherits current default");
+    }
+
+    private static void BadgeBatchAppearance()
+    {
+        var legacy = new BrowserProfileSettings { ColorHex = "#112233", AvatarBgHex = "#445566" };
+        var saved = System.Text.Json.JsonSerializer.Deserialize<BrowserProfileSettings>(
+            System.Text.Json.JsonSerializer.Serialize(legacy))!;
+        Check(saved.ThemeColorHex is null && saved.ColorHex == "#112233" && saved.AvatarBgHex == "#445566",
+            "existing independent colors preserved");
+        saved.SetThemeColor("#778899");
+        Check(saved.ThemeColorHex == "#778899" && saved.ColorHex is null && saved.AvatarBgHex is null
+            && saved.AvatarTextColorHex is null, "explicit theme selection unifies color and restores automatic contrast");
+        var source = new AvatarStyle { AvatarText = "source", AvatarBgHex = "#112233",
+            AvatarBgHex2 = "#445566", AvatarShape = AvatarShape.Hexagon,
+            AvatarBgStyle = AvatarBgStyle.DiagonalSplit, AvatarOverlay = AvatarOverlay.Ring };
+        var target = new BrowserProfileSettings { AvatarText = "own", CustomAvatarPath = "own.png",
+            ColorHex = "#778899", Visible = false };
+        source.ApplyAppearanceTo(target);
+        Check(target.AvatarText == "own" && target.CustomAvatarPath == "own.png", "batch preserves account identity");
+        Check(!target.Visible && target.ColorHex == "#778899", "style batch preserves unrelated settings");
+        Check(target.AvatarShape == AvatarShape.Hexagon && target.AvatarBgStyle == AvatarBgStyle.DiagonalSplit
+            && target.AvatarBgHex2 == "#445566" && target.AvatarOverlay == AvatarOverlay.Ring, "batch applies full appearance");
+        foreach (var style in new[] { AvatarBgStyle.Split, AvatarBgStyle.DiagonalSplit, AvatarBgStyle.Spotlight })
+        {
+            target.AvatarBgStyle = style;
+            var brush = BadgeWindow.BuildAvatarBrush(System.Windows.Media.Colors.Red, target);
+            Check(brush is System.Windows.Media.GradientBrush, "new styles render gradient or split brush");
+            var restored = System.Text.Json.JsonSerializer.Deserialize<BrowserProfileSettings>(
+                System.Text.Json.JsonSerializer.Serialize(target))!;
+            Check(restored.AvatarBgStyle == style, "new style persists");
+        }
+    }
+
+    private static void DockPlayerInstances()
+    {
+        Check(DockApplicationRuntime.ExtractInstance("--instance Pie64_1 --source desktop_shortcut") == "Pie64_1", "space instance");
+        Check(DockApplicationRuntime.ExtractInstance("--instance=\"Pie64_2\"") == "Pie64_2", "quoted equals instance");
+        Check(DockApplicationRuntime.ExtractInstance("--other-instance Pie64_1") is null, "different flag not matched");
+        var app = new DockApplication { ExecutablePath = @"C:\BlueStacks\HD-Player.exe", InstanceName = "Pie64_1" };
+        var windows = new[] {
+            new DockApplicationRuntime.Window(new IntPtr(1), 1, app.ExecutablePath, "Pie64_1"),
+            new DockApplicationRuntime.Window(new IntPtr(2), 2, app.ExecutablePath, "Pie64_2"),
+            new DockApplicationRuntime.Window(new IntPtr(3), 3, @"C:\MSI\HD-Player.exe", "Pie64_1"),
+            new DockApplicationRuntime.Window(new IntPtr(4), 4, app.ExecutablePath) };
+        Check(DockApplicationRuntime.Match(app, windows).Single().Handle == new IntPtr(1), "path and instance required");
+        var running = DockRunningItems.Build(windows.Take(2), new[] { app }, new Dictionary<IntPtr, string>(),
+            Array.Empty<ChromeProfile>(), new HashSet<string>(), Array.Empty<DockItem>());
+        Check(running.Count == 1 && running[0].Application!.InstanceName == "Pie64_2", "other instance remains running");
+    }
     private static void Check(bool condition, string message)
     { if (!condition) throw new InvalidOperationException(message); }
     private static TaskCompletionSource Signal() => new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -35,8 +105,82 @@ internal static class HeadlessTests
             "invalid work area avoids division by zero");
         Check(!new AppConfig().QuickGridPositionPreview, "preview is opt-in");
     }
+    private static void CrossDpiMove()
+    {
+        // Two side-by-side monitors, ownership determined by greatest overlap.
+        IntPtr Monitor(MagiDesk.Native.NativeMethods.RECT r) => new(r.Left + r.Width / 2 < 2000 ? 1 : 2);
+        var oldPosition = new MagiDesk.Native.NativeMethods.POINT { X = 1300, Y = 100 };
+        var corrected = new MagiDesk.Native.NativeMethods.POINT { X = 900, Y = 100 };
+        Check(!MagiDesk.Features.AltDragger.CanUpdateMoveGrab(oldPosition, corrected, 1500, 1000, Monitor),
+            "defer correction that would reverse monitor ownership after DPI growth");
+        oldPosition.X += 500;
+        corrected.X += 500;
+        Check(MagiDesk.Features.AltDragger.CanUpdateMoveGrab(oldPosition, corrected, 1500, 1000, Monitor),
+            "resume proportional correction once both positions belong to destination");
+        oldPosition.X = 1400;
+        corrected.X = 1700;
+        Check(!MagiDesk.Features.AltDragger.CanUpdateMoveGrab(oldPosition, corrected, 1000, 800, Monitor),
+            "reverse crossing also rejects correction-induced monitor change");
+        var safe = MagiDesk.Features.AltDragger.ConstrainMoveCorrection(
+            new() { X = 1300, Y = 400 }, new() { X = 900, Y = 100 }, 1500, 1000, Monitor);
+        Check(safe.X == 1250 && safe.Y == 100, "only boundary axis constrained, vertical grab fully corrected");
+        safe = MagiDesk.Features.AltDragger.ConstrainMoveCorrection(
+            new() { X = 1400, Y = 100 }, new() { X = 1700, Y = 400 }, 1000, 800, Monitor);
+        Check(safe.X == 1499 && safe.Y == 400, "reverse crossing stops at nearest safe pixel");
+        for (int step = 0; step <= 100; step++)
+        {
+            safe = MagiDesk.Features.AltDragger.ConstrainMoveCorrection(
+                new() { X = 1300 + step, Y = 400 }, new() { X = 1200 + step, Y = 100 }, 1500, 1000, Monitor);
+            Check(safe.X == Math.Max(1250, 1200 + step) && safe.Y == 100,
+                "correction releases continuously without old-offset jump");
+        }
+        IntPtr Stacked(MagiDesk.Native.NativeMethods.RECT r) => new(r.Top + r.Height / 2 < 0 ? 1 : 2);
+        safe = MagiDesk.Features.AltDragger.ConstrainMoveCorrection(
+            new() { X = -1400, Y = -300 }, new() { X = -1700, Y = -600 }, 1000, 800, Stacked);
+        Check(safe.X == -1700 && safe.Y == -400, "stacked monitors constrain vertical axis with negative coordinates");
+        var anchor = new MagiDesk.Native.NativeMethods.RECT { Left = -1600, Top = 100, Right = -600, Bottom = 900 };
+        var grab = new MagiDesk.Native.NativeMethods.POINT { X = -1350, Y = 300 };
+        var cursor = new MagiDesk.Native.NativeMethods.POINT { X = 600, Y = 400 };
+        var p = MagiDesk.Features.AltDragger.MovePositionUnderCursor(anchor, grab, cursor, 1500, 1200);
+        Check(p.X == 225 && p.Y == 100, "100 to 150 percent retains quarter-window grab point");
+        p = MagiDesk.Features.AltDragger.MovePositionUnderCursor(anchor, grab, cursor, 1000, 800);
+        Check(p.X == 350 && p.Y == 200, "return to original DPI has no accumulated offset");
+        p = MagiDesk.Features.AltDragger.MovePositionUnderCursor(anchor, grab, grab, 1000, 800);
+        Check(p.X == anchor.Left && p.Y == anchor.Top, "unchanged size preserves negative-screen position");
+        p = MagiDesk.Features.AltDragger.MovePositionUnderCursor(anchor, grab, cursor, 500, 400);
+        Check(p.X == 475 && p.Y == 300, "lower DPI retains grab ratio");
+    }
+
+    private static void ProtectedSnapDpiSize()
+    {
+        var target = new MagiDesk.Native.NativeMethods.RECT { Left = 1714, Top = 50, Right = 3446, Bottom = 1398 };
+        var result = MagiDesk.Features.Zones.SnapService.PrecompensateDpiSize(target, 168, 96);
+        Check(result.Width == 3031 && result.Height == 2359, "protected first request compensates 175 percent source");
+        Check(result.Left == target.Left && result.Top == target.Top, "DPI compensation does not scale screen origin");
+        Check(Math.Round(result.Width * 96d / 168) == target.Width && Math.Round(result.Height * 96d / 168) == target.Height,
+            "destination scaling returns intended size");
+        Check(MagiDesk.Features.Zones.SnapService.PrecompensateDpiSize(target, 96, 96).Equals(target), "same DPI is unchanged");
+        Check(MagiDesk.Features.Zones.SnapService.PrecompensateDpiSize(target, 168, 0).Equals(target), "missing DPI is unchanged");
+        target = new() { Left = -2000, Top = -1200, Right = -1000, Bottom = -400 };
+        result = MagiDesk.Features.Zones.SnapService.PrecompensateDpiSize(target, 144, 96);
+        Check(result.Left == -2000 && result.Top == -1200 && result.Width == 1500 && result.Height == 1200, "negative origins remain physical");
+        target = new() { Left = int.MaxValue - 100, Top = 0, Right = int.MaxValue, Bottom = 100 };
+        Check(MagiDesk.Features.Zones.SnapService.PrecompensateDpiSize(target, 168, 96).Equals(target), "coordinate overflow skips compensation");
+    }
+
     private static void ProportionalRestore()
     {
+        var snappedSize = new MagiDesk.Native.NativeMethods.RECT { Right = 1734, Bottom = 1349 };
+        var acrossScreen = new MagiDesk.Native.NativeMethods.RECT { Right = 3035, Bottom = 2361 };
+        Check(!MagiDesk.Features.Zones.ZonesEngine.WasManuallyResized(snappedSize, acrossScreen, 96, 168), "cross-DPI move is not manual resize");
+        Check(!MagiDesk.Features.Zones.ZonesEngine.WasManuallyResized(acrossScreen, snappedSize, 168, 96), "reverse DPI move preserves restore");
+        Check(MagiDesk.Features.Zones.ZonesEngine.WasManuallyResized(snappedSize, acrossScreen, 96, 96), "real size change still cancels restore");
+        var size = new MagiDesk.Native.NativeMethods.RECT { Right = 1200, Bottom = 900 };
+        var workArea = new MagiDesk.Native.NativeMethods.RECT { Right = 1920, Bottom = 1080 };
+        var scaled = MagiDesk.Features.Zones.ZonesEngine.ScaleRestoreSize(size, 144, 96, workArea);
+        Check(scaled.Width == 800 && scaled.Height == 600, "restore uses original DPI, not intermediate monitor");
+        scaled = MagiDesk.Features.Zones.ZonesEngine.ScaleRestoreSize(size, 96, 192, workArea);
+        Check(scaled.Width == 1920 && scaled.Height == 1080, "restore fits destination work area");
         var snapped = new MagiDesk.Native.NativeMethods.RECT { Right = 1000, Bottom = 800 };
         var original = new MagiDesk.Native.NativeMethods.RECT { Right = 600, Bottom = 400 };
         var cursor = new MagiDesk.Native.NativeMethods.POINT { X = -500, Y = 200 };
@@ -51,11 +195,664 @@ internal static class HeadlessTests
         Check(p.X == cursor.X && p.Y == cursor.Y, "outside grab clamps to top left");
     }
 
+    private static MagiDesk.Features.ResizeRequestWorker.Request ResizeRequest(int width, bool final = false)
+        => new(new IntPtr(1), 1, 1, -300, 40, width, 500, final, Environment.TickCount64);
+
+    private static async Task ResizeCoalescing()
+    {
+        var entered = Signal();
+        var release = Signal();
+        var finished = Signal();
+        var applied = new ConcurrentQueue<MagiDesk.Features.ResizeRequestWorker.Request>();
+        int callerThread = Environment.CurrentManagedThreadId, workerThread = 0;
+        using var worker = new MagiDesk.Features.ResizeRequestWorker(request =>
+        {
+            workerThread = Environment.CurrentManagedThreadId;
+            applied.Enqueue(request);
+            if (request.Width == 100)
+            {
+                entered.TrySetResult();
+                release.Task.GetAwaiter().GetResult();
+            }
+            if (request.Final) finished.TrySetResult();
+        });
+        try
+        {
+            var generation = worker.Begin();
+            Check(worker.Submit(generation, ResizeRequest(100)), "first resize accepted");
+            await Await(entered.Task);
+            for (int width = 101; width < 1100; width++)
+                Check(worker.Submit(generation, ResizeRequest(width)), "hook can submit while target is blocked");
+            Check(worker.Submit(generation, ResizeRequest(1200, final: true)), "release size accepted");
+            Check(applied.Count == 1, "only one native operation may be in flight");
+            release.TrySetResult();
+            await Await(finished.Task);
+            var results = applied.ToArray();
+            Check(results.Length == 2 && results[1].Width == 1200 && results[1].Final,
+                "obsolete intermediate sizes skipped; final size applied without another mouse event");
+            Check(workerThread != callerThread, "target work never executes on submitting thread");
+        }
+        finally { release.TrySetResult(); worker.Dispose(); }
+        await Await(worker.Completion);
+    }
+
+    private static async Task ResizeGeneration()
+    {
+        var entered = Signal(); var release = Signal(); var finished = Signal();
+        var applied = new ConcurrentQueue<int>();
+        using var worker = new MagiDesk.Features.ResizeRequestWorker(request =>
+        {
+            applied.Enqueue(request.Width);
+            if (request.Width == 100)
+            {
+                entered.TrySetResult();
+                release.Task.GetAwaiter().GetResult();
+            }
+            else finished.TrySetResult();
+        });
+        try
+        {
+            long old = worker.Begin();
+            worker.Submit(old, ResizeRequest(100));
+            await Await(entered.Task);
+            worker.Submit(old, ResizeRequest(200, final: true));
+            long current = worker.Begin();
+            Check(!worker.Submit(old, ResizeRequest(300)), "stale drag cannot overwrite new drag");
+            worker.Submit(current, ResizeRequest(400, final: true));
+            release.TrySetResult();
+            await Await(finished.Task);
+            Check(applied.SequenceEqual(new[] { 100, 400 }), "new drag clears previous pending release");
+        }
+        finally { release.TrySetResult(); worker.Dispose(); }
+        await Await(worker.Completion);
+    }
+
+    private static async Task ResizeShutdown()
+    {
+        var entered = Signal(); var release = Signal();
+        int count = 0;
+        using var worker = new MagiDesk.Features.ResizeRequestWorker(_ =>
+        {
+            Interlocked.Increment(ref count);
+            entered.TrySetResult();
+            release.Task.GetAwaiter().GetResult();
+        });
+        try
+        {
+            long generation = worker.Begin();
+            worker.Submit(generation, ResizeRequest(100));
+            await Await(entered.Task);
+            worker.Submit(generation, ResizeRequest(200));
+            // Await with a timeout so a regression cannot hang the test runner.
+            await Await(Task.Run(worker.Dispose));
+            Check(!worker.Submit(generation, ResizeRequest(300)), "closed worker rejects updates");
+        }
+        finally { release.TrySetResult(); worker.Dispose(); }
+        await Await(worker.Completion);
+        Check(count == 1, "shutdown drops pending work while allowing in-flight call to finish");
+    }
+
+    private static void DesktopDefaultBox()
+    {
+        var area = new MagiDesk.Native.NativeMethods.RECT { Left = -1920, Top = 40, Right = 0, Bottom = 1080 };
+        var monitor = new MagiDesk.Features.Zones.MonitorSlot(IntPtr.Zero, "primary", area, area, true, 150);
+        var config = new AppConfig { DesktopUnifiedSurface = true };
+        config.DesktopBoxes.Add(new DesktopBox { IsUnsorted = true });
+        Check(DesktopBoxDefaults.EnsureClassificationBox(config, new[] { monitor }), "initialize classification box");
+        var box = config.DesktopBoxes.Single(b => b.Id == config.DesktopInitialClassificationBoxId);
+        Check(box.ClassificationOriginalName == "桌面" && box.FolderPath is null && box.Members.Count == 0, "ordinary classification box, no file operations");
+        Check(DesktopTabGroups.Members(config.DesktopBoxes, box).Select(b => b.Name).SequenceEqual(new[] { "快捷方式", "其他" }), "two default pages in expected order");
+        Check(box.W == 410 && box.H == 410 && box.X + box.W * 1.5 == area.Right - 16 && box.Y == area.Top + 20,
+            "410 DIP width, physical right 16px and top 20px insets at 150 percent DPI");
+        config.DesktopBoxes.RemoveAll(b => !b.IsUnsorted);
+        Check(!DesktopBoxDefaults.EnsureClassificationBox(config, new[] { monitor }) && config.DesktopBoxes.Count == 1,
+            "deleted default is not recreated");
+        config = new AppConfig { DesktopUnifiedSurface = true };
+        config.DesktopBoxes.Add(new DesktopBox { Name = "existing", X = 100, Y = 200 });
+        DesktopBoxDefaults.EnsureClassificationBox(config, new[] { monitor });
+        Check(config.DesktopBoxes.Count == 1 && config.DesktopBoxes[0].X == 100, "existing boxes retained without duplicate default");
+        config = new AppConfig();
+        Check(!DesktopBoxDefaults.EnsureClassificationBox(config, new[] { monitor }), "classic desktop mode unchanged");
+    }
+
+    private static void DesktopInitialClassification()
+    {
+        var config = new AppConfig { DesktopUnifiedSurface = true };
+        DesktopBoxDefaults.EnsureClassificationBox(config, Array.Empty<MagiDesk.Features.Zones.MonitorSlot>());
+        var box = config.DesktopBoxes.Single(b => b.Id == config.DesktopInitialClassificationBoxId);
+        var item = new DesktopItem(@"C:\Desktop\example.lnk", "example", null, false, 0, default, default);
+        var systemIcons = new[]
+        {
+            "::{20D04FE0-3AEA-1069-A2D8-08002B30309D}",
+            "::{645FF040-5081-101B-9F08-00AA002F954E}",
+            "::{5399E694-6CE5-4D6C-8FCE-1D8870FDCBA0}",
+        }.Select(path => new DesktopItem(path, "系统图标", null, false, 0, default, default)).ToArray();
+        var snapshot = new DesktopMembershipSnapshot { IsComplete = false };
+        Check(!DesktopBoxDefaults.AssignInitialContents(config, new[] { item }, snapshot)
+            && config.DesktopInitialClassificationBoxId == box.Id, "incomplete scan retains pending initialization");
+        snapshot.IsComplete = true;
+        Check(DesktopBoxDefaults.AssignInitialContents(config, new[] { item }.Concat(systemIcons).ToArray(), snapshot)
+            && box.Members.SequenceEqual(new[] { item.Path }), "initial desktop content assigned without changing path");
+        Check(systemIcons.All(icon => !box.Members.Contains(icon.Path)), "system icons remain on desktop during initial classification");
+        var shortcuts = config.DesktopBoxes.Single(b => b.Name == "快捷方式");
+        var document = item with { Path = @"C:\Desktop\notes.txt" };
+        var folder = item with { Path = @"C:\Desktop\folder.lnk", IsFolder = true };
+        var url = item with { Path = @"C:\Desktop\web.URL" };
+        var samples = new[] { item, document, folder, url };
+        Check(BoxClassification.Filter(shortcuts, config.DesktopBoxes, samples, DateTime.UtcNow).Select(i => i.Path)
+            .SequenceEqual(new[] { item.Path, url.Path }), "file and web shortcuts match case insensitively");
+        Check(BoxClassification.Filter(box, config.DesktopBoxes, samples, DateTime.UtcNow).Select(i => i.Path)
+            .SequenceEqual(new[] { document.Path, folder.Path }), "other contains documents and folders");
+        Check(DesktopShellState.Merge(systemIcons, Array.Empty<DesktopItem>()).Count == 0,
+            "system-hidden icons disappear instead of being synthesized from defaults");
+        DesktopMembershipRecovery.Assign(config.DesktopBoxes, box, new[] { systemIcons[0].Path }, snapshot);
+        Check(box.Members.Contains(systemIcons[0].Path), "user may explicitly classify a system icon");
+        Check(box.MemberReferences.Single().PendingAssignment, "membership identity recovery preserved");
+        box.Members.Clear();
+        Check(!DesktopBoxDefaults.AssignInitialContents(config, new[] { item }, snapshot), "later refresh never reclaims desktop items");
+        config = new AppConfig { DesktopUnifiedSurface = true, DesktopDefaultBoxInitialized = true };
+        config.DesktopBoxes.Add(new DesktopBox { Name = "桌面" });
+        DesktopBoxDefaults.EnsureClassificationBox(config, Array.Empty<MagiDesk.Features.Zones.MonitorSlot>());
+        Check(config.DesktopInitialClassificationBoxId == config.DesktopBoxes.Single(b => b.Name == "其他").Id, "previous empty default upgraded");
+        var other = new DesktopBox(); other.Members.Add(item.Path); config.DesktopBoxes.Add(other);
+        DesktopBoxDefaults.AssignInitialContents(config, new[] { item }, snapshot);
+        Check(other.Members.Count == 1 && config.DesktopBoxes[0].Members.Count == 0, "explicit user classification not stolen");
+    }
+
+    private static void FolderDropRouting()
+    {
+        Check(FolderDrop.ParentFolder(@"C:\Desktop\Folder") == @"C:\Desktop", "back drop resolves real parent directory");
+        Check(FolderDrop.ParentFolder(@"C:\Desktop\Folder\") == @"C:\Desktop", "trailing separator does not target current folder");
+        Check(FolderDrop.ParentFolder(@"C:\") is null && FolderDrop.ParentFolder(null) is null,
+            "root and virtual box have no parent drop destination");
+        Check(FolderDrop.ParentFolder(@"\\server\share\Folder") == @"\\server\share", "network folder resolves parent share");
+        var both = DragDropEffects.Copy | DragDropEffects.Move;
+        Check(FolderDrop.Effect(new[] { @"C:\Desktop\a.txt" }, @"C:\Desktop\Folder", both, 0) == DragDropEffects.Move,
+            "same-drive folder drop moves");
+        Check(FolderDrop.Effect(new[] { @"C:\Desktop\a.txt" }, @"D:\Folder", both, 0) == DragDropEffects.Copy,
+            "cross-drive folder drop copies");
+        Check(FolderDrop.Effect(new[] { @"C:\Desktop\a.txt" }, @"C:\Folder", both, DragDropKeyStates.ControlKey) == DragDropEffects.Copy,
+            "control copies");
+        Check(FolderDrop.Effect(new[] { @"C:\Desktop\a.txt" }, @"D:\Folder", both, DragDropKeyStates.ShiftKey) == DragDropEffects.Move,
+            "shift moves");
+        Check(FolderDrop.Effect(new[] { @"C:\Folder" }, @"C:\Folder\Child", both, 0) == DragDropEffects.None,
+            "cannot drop directory into descendant");
+        Check(FolderDrop.Effect(new[] { @"C:\Folder" }, @"c:\folder", both, 0) == DragDropEffects.None,
+            "cannot drop directory into itself");
+        Check(FolderDrop.Effect(new[] { @"C:\Folder" }, @"C:\FolderTwo", both, 0) == DragDropEffects.Move,
+            "sibling with same prefix is allowed");
+        Check(FolderDrop.Effect(new[] { @"C:\a.txt" }, @"C:\Folder", DragDropEffects.Move, DragDropKeyStates.ControlKey) == DragDropEffects.None,
+            "explicit copy never falls back to move");
+        Check(FolderDrop.Effect(new[] { @"C:\a.txt" }, @"C:\Folder", both, DragDropKeyStates.AltKey) == DragDropEffects.None,
+            "unsupported link gesture rejected");
+        string root = Path.Combine(Path.GetTempPath(), "MagiDesk-FolderDrop-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            string file = Path.Combine(root, "a.txt"), folder = Path.Combine(root, "source"), target = Path.Combine(root, "target");
+            File.WriteAllText(file, "test"); Directory.CreateDirectory(folder); Directory.CreateDirectory(target);
+            int calls = 0;
+            bool Transfer(IReadOnlyList<string> sources, string destination, bool move)
+            {
+                calls++;
+                Check(sources.SequenceEqual(new[] { file, folder }) && destination == target && move,
+                    "selected file and directory transferred to actual target folder, duplicates removed");
+                return true;
+            }
+            Check(FolderDrop.Execute(new[] { file, folder, file }, target, DragDropEffects.Move, Transfer) && calls == 1,
+                "valid multi-selection reaches transfer once");
+            Check(!FolderDrop.Execute(new[] { file, Path.Combine(root, "missing") }, target, DragDropEffects.Move, Transfer)
+                && calls == 1, "missing source rejects whole selection");
+            Check(!FolderDrop.Execute(new[] { file }, root, DragDropEffects.Move, Transfer) && calls == 1,
+                "moving to existing parent is a no-op");
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    private static void CreatedCategoryOverride()
+    {
+        var source = new DesktopBox { Name = "桌面" };
+        var boxes = new List<DesktopBox> { source };
+        var rules = new[] { new BoxClassificationRule { Name = "快捷方式", Extensions = "lnk" } };
+        var page = BoxClassification.Apply(boxes, source, rules);
+        var file = new DesktopItem(@"C:\Desktop\new.txt", "new", null, false, 0, default, default);
+        var folder = file with { Path = @"C:\Desktop\folder", IsFolder = true };
+        foreach (var item in new[] { file, folder })
+        {
+            DesktopMembershipRecovery.Assign(boxes, page, new[] { item.Path }, null);
+            BoxClassification.KeepCreatedItem(page, item.Path);
+        }
+        Check(DesktopFenceService.ResolveBoxItems(page, new[] { file, folder }, boxes).Count == 2,
+            "new file and folder stay in originating category despite rule mismatch");
+        Check(DesktopFenceService.ResolveBoxItems(source, new[] { file, folder }, boxes).Count == 0,
+            "manual items are not duplicated in other category");
+        var json = System.Text.Json.JsonSerializer.Serialize(boxes);
+        boxes = System.Text.Json.JsonSerializer.Deserialize<List<DesktopBox>>(json)!;
+        page = boxes.Single(b => b.CategoryRule is not null);
+        Check(page.MemberReferences.All(r => r.KeepInCategory), "manual category persists across restart");
+        string renamed = @"C:\Desktop\renamed.txt";
+        DesktopPathRename.Apply(boxes, file.Path, renamed);
+        file = file with { Path = renamed };
+        Check(DesktopFenceService.ResolveBoxItems(page, new[] { file, folder }, boxes).Count == 2,
+            "rename preserves manual category");
+        page = BoxClassification.Reorganize(boxes, page, rules);
+        Check(DesktopFenceService.ResolveBoxItems(page, new[] { file, folder }, boxes).Count == 0
+            && DesktopFenceService.ResolveBoxItems(boxes.Single(b => b.CategoryRule is null), new[] { file, folder }, boxes).Count == 2,
+            "explicit reorganize clears manual override and reapplies rules");
+        var mapped = new DesktopBox { FolderPath = @"C:\Mapped" };
+        boxes = new() { mapped };
+        page = BoxClassification.Apply(boxes, mapped, rules);
+        BoxClassification.KeepCreatedItem(page, file.Path);
+        Check(BoxClassification.Filter(page, boxes, new[] { file }, DateTime.UtcNow).Count == 1,
+            "mapped folder categories support the same override");
+    }
+
+    private static void AppearanceScopes()
+    {
+        var desktop = new DesktopBox { IsUnsorted = true, Name = "桌面" };
+        var first = new DesktopBox { Name = "快捷方式", TabGroupId = "g", ClassificationOriginalName = "桌面" };
+        var second = new DesktopBox { Name = "其他", TabGroupId = "g" };
+        var separate = new DesktopBox { Name = "独立盒子" };
+        var boxes = new[] { desktop, first, separate, second };
+        var choices = BoxAppearanceScope.Choices(boxes, true);
+        Check(choices.Select(c => c.Id).SequenceEqual(new[] { "group:g", first.Id, second.Id, separate.Id }),
+            "group parent followed by its pages; unified desktop excluded");
+        Check(BoxAppearanceScope.Targets(boxes, true, "group:g").SequenceEqual(new[] { first, second }),
+            "whole-box scope includes its pages only");
+        Check(BoxAppearanceScope.Targets(boxes, true, second.Id).SequenceEqual(new[] { second }), "page scope remains independent");
+        Check(BoxAppearanceScope.Targets(boxes, true, desktop.Id).Length == 0, "hidden desktop cannot be edited through stale selection");
+        Check(BoxAppearanceScope.Targets(boxes, true, "group:removed").Length == 0, "removed group cannot affect another box");
+    }
+
+    private static void BackgroundImageSettings()
+    {
+        var source = new DesktopBox { BackgroundImagePath = @"C:\Pictures\background.png", BackgroundImageFit = true };
+        var boxes = new List<DesktopBox> { source };
+        var next = DesktopTabGroups.Add(boxes, source, "新分页", null);
+        Check(next.BackgroundImagePath == source.BackgroundImagePath && next.BackgroundImageFit, "new page inherits background appearance");
+        string json = System.Text.Json.JsonSerializer.Serialize(boxes);
+        boxes = System.Text.Json.JsonSerializer.Deserialize<List<DesktopBox>>(json)!;
+        Check(boxes.All(b => b.BackgroundImagePath == source.BackgroundImagePath && b.BackgroundImageFit), "background image settings persist");
+        foreach (var target in BoxAppearanceScope.Targets(boxes, true, "group:" + source.TabGroupId)) target.BackgroundImagePath = null;
+        Check(boxes.All(b => b.BackgroundImagePath is null), "whole-box image removal reaches all pages");
+        BoxAppearanceScope.Targets(boxes, true, next.Id).Single().BackgroundImagePath = "page.png";
+        Check(boxes.Single(b => b.Id == source.Id).BackgroundImagePath is null, "page image is independent");
+    }
+
+    private static void SymmetricResizeGeometry()
+    {
+        var rect = new MagiDesk.Native.NativeMethods.RECT { Left = -1000, Top = 100, Right = 200, Bottom = 900 };
+        foreach (int edge in new[] { 10, 11, 12, 13, 14, 15, 16, 17 })
+        {
+            var result = MagiDesk.Features.SymmetricResize.Calculate(rect, edge, 30, 20, 100);
+            Check(result.Left + result.Right == rect.Left + rect.Right && result.Top + result.Bottom == rect.Top + rect.Bottom,
+                "all eight handles preserve center");
+            int horizontal = edge is 10 or 13 or 16 ? -30 : edge is 11 or 14 or 17 ? 30 : 0;
+            int vertical = edge is 12 or 13 or 14 ? -20 : edge is 15 or 16 or 17 ? 20 : 0;
+            Check(result.Width == rect.Width + horizontal * 2 && result.Height == rect.Height + vertical * 2,
+                "opposite edge mirrors cursor delta; unrelated axis stays unchanged");
+        }
+        var minimum = MagiDesk.Features.SymmetricResize.Calculate(rect, 17, -5000, -5000, 100);
+        Check(minimum.Width == 100 && minimum.Height == 100, "both dimensions clamp independently");
+        rect.Right++;
+        minimum = MagiDesk.Features.SymmetricResize.Calculate(rect, 17, -5000, -5000, 100);
+        Check(minimum.Width == 101 && minimum.Left + minimum.Right == rect.Left + rect.Right,
+            "odd dimensions preserve exact center at minimum");
+    }
+
+    private static (AppConfig Config, ChromeProfile[] Profiles, DockApplication App) MixedDockFixture()
+    {
+        var profiles = new[] {
+            new ChromeProfile { Browser = BrowserInfo.All[0], Directory = "Default", Name = "工作" },
+            new ChromeProfile { Browser = BrowserInfo.All[0], Directory = "Profile 2", Name = "个人" } };
+        var app = new DockApplication { Id = "tool", Name = "工具", ExecutablePath = @"C:\Apps\tool.exe" };
+        var cfg = new AppConfig();
+        cfg.DockApplications.Add(app);
+        cfg.BrowserDockGroups.Add(new BrowserDockGroup { Name = "常用", ProfileDirs = new() { profiles[0].Key, "app:tool", profiles[1].Key } });
+        return (cfg, profiles, app);
+    }
+
+    private static void DockMixedProjection()
+    {
+        var (cfg, profiles, app) = MixedDockFixture();
+        var result = DockGroups.Build(cfg, profiles);
+        Check(result.Count == 1 && result[0].Items.Select(i => i.Key).SequenceEqual(cfg.BrowserDockGroups[0].ProfileDirs), "mixed order, no extra application section");
+        Check(result[0].Items[0].Profile == profiles[0] && result[0].Items[1].Application == app, "identities and launch configuration preserved");
+        cfg.BrowserDockGroups.Add(new BrowserDockGroup { Name = "重复", ProfileDirs = new() { "APP:TOOL", profiles[0].Key, "app:missing" } });
+        cfg.BrowserProfiles[profiles[0].Key] = new BrowserProfileSettings { Visible = false };
+        result = DockGroups.Build(cfg, profiles);
+        Check(result.Count == 1 && result[0].Items.Select(i => i.Key).SequenceEqual(new[] { "app:tool", profiles[1].Key }), "duplicate, missing and hidden members omitted");
+        cfg.BrowserDockGroups.Clear();
+        Check(DockGroups.Build(cfg, profiles).Single().Items.Single().Application == app, "fixed application survives group deletion and hide-ungrouped");
+        cfg.BrowserDockHideUngrouped = false;
+        result = DockGroups.Build(cfg, profiles);
+        Check(result.Count == 2 && result[0].Items.Single().Profile == profiles[1], "ungrouped visibility still honors browser settings");
+    }
+
+    private static void DockMixedReorder()
+    {
+        // Every source/target pair and both drop sides, including same-group forward moves.
+        for (int source = 0; source < 3; source++)
+        for (int target = 0; target < 3; target++)
+        foreach (bool after in new[] { false, true })
+        {
+            var (cfg, profiles, _) = MixedDockFixture();
+            var keys = cfg.BrowserDockGroups[0].ProfileDirs.ToArray();
+            bool moved = DockGroups.Reorder(cfg, profiles, keys[source], keys[target], after);
+            Check(moved == (source != target), "self drop is a no-op");
+            var expected = keys.ToList();
+            if (source != target)
+            {
+                expected.Remove(keys[source]);
+                expected.Insert(expected.IndexOf(keys[target]) + (after ? 1 : 0), keys[source]);
+            }
+            Check(cfg.BrowserDockGroups[0].ProfileDirs.SequenceEqual(expected), "mixed relative ordering without off-by-one or duplicates");
+        }
+    }
+
+    private static void DockMixedMoveAndRemove()
+    {
+        var (cfg, profiles, app) = MixedDockFixture();
+        var other = new BrowserDockGroup { Name = "其他" };
+        cfg.BrowserDockGroups.Add(other);
+        Check(DockGroups.MoveInto(cfg, "APP:TOOL", other), "app can enter empty group");
+        Check(!cfg.BrowserDockGroups[0].ProfileDirs.Contains("app:tool") && other.ProfileDirs.Single() == "APP:TOOL", "case-insensitive single membership");
+        Check(DockGroups.Reorder(cfg, profiles, profiles[0].Key, "app:tool", true), "browser moves beside application across groups");
+        Check(other.ProfileDirs.SequenceEqual(new[] { "APP:TOOL", profiles[0].Key }), "cross-group position retained");
+        DockGroups.RemoveApplication(cfg, app.Id);
+        Check(cfg.DockApplications.Count == 0 && other.ProfileDirs.Single() == profiles[0].Key, "remove cleans references without losing browser");
+        DockGroups.Detach(cfg, profiles[0].Key);
+        Check(cfg.BrowserDockGroups.Contains(other) && other.ProfileDirs.Count == 0, "empty named destination retained");
+    }
+
+    private static void DockMixedUngroupedMoves()
+    {
+        var (cfg, profiles, _) = MixedDockFixture();
+        var secondApp = new DockApplication { Id = "second" };
+        cfg.DockApplications.Add(secondApp);
+        Check(DockGroups.Reorder(cfg, profiles, "app:tool", "app:second", true), "application can leave group beside ungrouped app");
+        Check(DockGroups.Build(cfg, profiles).Last().Items.Select(i => i.Key).SequenceEqual(new[] { "app:second", "app:tool" }), "ungrouped app order persists");
+        Check(!DockGroups.Reorder(cfg, profiles, profiles[0].Key, "app:second", false), "invalid cross-section drop rejected without detaching");
+        Check(cfg.BrowserDockGroups[0].ProfileDirs.Contains(profiles[0].Key), "rejected drop preserves source");
+        cfg.BrowserDockHideUngrouped = false;
+        DockGroups.Detach(cfg, profiles[1].Key);
+        Check(DockGroups.Reorder(cfg, profiles, profiles[0].Key, profiles[1].Key, true), "profile can leave group");
+        Check(DockGroups.Build(cfg, profiles).First().Items.Select(i => i.Key).SequenceEqual(new[] { profiles[1].Key, profiles[0].Key }), "ungrouped profile order retained");
+        Check(!DockGroups.Reorder(cfg, profiles, "app:missing", "app:second", true), "stale drag rejected");
+        Check(!DockGroups.MoveInto(cfg, "app:tool", new BrowserDockGroup()), "deleted group rejected");
+    }
+
+    private static void DockMixedPersistence()
+    {
+        var (cfg, profiles, _) = MixedDockFixture();
+        string json = System.Text.Json.JsonSerializer.Serialize(cfg);
+        var restored = System.Text.Json.JsonSerializer.Deserialize<AppConfig>(json)!;
+        Check(DockGroups.Build(restored, profiles)[0].Items.Select(i => i.Key).SequenceEqual(cfg.BrowserDockGroups[0].ProfileDirs), "mixed group survives round-trip");
+        Check(!json.Contains("ItemKeys"), "existing serialized membership field retained");
+        var old = System.Text.Json.JsonSerializer.Deserialize<AppConfig>("{\"BrowserDockGroups\":[{\"Name\":\"旧分组\",\"ProfileDirs\":[\"chrome:Default\"]}]}")!;
+        Check(DockGroups.Build(old, profiles).Single().Items.Single().Profile == profiles[0], "old browser-only group remains compatible");
+        var before = BadgeSettingsSnapshot.CaptureDock(restored);
+        DockGroups.Reorder(restored, profiles, "app:tool", profiles[0].Key, false);
+        Check(before != BadgeSettingsSnapshot.CaptureDock(restored), "membership order changes refresh Dock snapshot");
+    }
+
+    private static void DockMixedRunningDeduplication()
+    {
+        var (cfg, profiles, app) = MixedDockFixture();
+        var visible = DockGroups.Build(cfg, profiles).SelectMany(g => g.Items).Where(i => i.Profile is not null)
+            .Select(i => i.Key).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var windows = new[] { new DockApplicationRuntime.Window(new IntPtr(1), 1, app.ExecutablePath),
+            new DockApplicationRuntime.Window(new IntPtr(2), 2, @"C:\Browser\chrome.exe") };
+        var mapping = new Dictionary<IntPtr, string> { [new IntPtr(2)] = profiles[0].Key };
+        Check(DockRunningItems.Build(windows, cfg.DockApplications, mapping, profiles, visible, Array.Empty<DockItem>()).Count == 0,
+            "grouped apps and browser accounts do not reappear in running section");
+    }
+
+    private static void DockApplicationConfig()
+    {
+        var old = System.Text.Json.JsonSerializer.Deserialize<AppConfig>("{\"BrowserDockGroups\":[{\"Name\":\"工作\",\"ProfileDirs\":[\"chrome:Default\"]}]}")!;
+        Check(old.DockApplications.Count == 0 && old.BrowserDockGroups[0].ProfileDirs[0] == "chrome:Default", "old config stays intact without migration");
+        var app = new DockApplication { Name = "中文工具", LaunchPath = @"C:\Apps\工具.lnk", ExecutablePath = @"C:\Apps\工具.exe" };
+        old.DockApplications.Add(app);
+        string key = new DockItem(app).Key;
+        app.Name = "重命名";
+        Check(new DockItem(app).Key == key && key.StartsWith("app:"), "name changes never change identity");
+        var restored = System.Text.Json.JsonSerializer.Deserialize<AppConfig>(System.Text.Json.JsonSerializer.Serialize(old))!;
+        Check(restored.DockApplications[0].Id == app.Id && restored.DockApplications[0].LaunchPath == app.LaunchPath,
+            "restart preserves identity and original shortcut");
+        string snapshot = BadgeSettingsSnapshot.CaptureDock(old);
+        app.Name = "再次改名";
+        Check(snapshot != BadgeSettingsSnapshot.CaptureDock(old), "application edits trigger dock refresh");
+    }
+
+    private static void DockCustomIcon()
+    {
+        var cfg = new AppConfig();
+        var app = new DockApplication { LaunchPath = @"C:\App\program.exe", IconPath = @"C:\图片\自定义.png" };
+        cfg.DockApplications.Add(app);
+        var restored = System.Text.Json.JsonSerializer.Deserialize<AppConfig>(System.Text.Json.JsonSerializer.Serialize(cfg))!;
+        Check(restored.DockApplications[0].IconPath == app.IconPath, "custom icon survives restart");
+        string before = BadgeSettingsSnapshot.CaptureDock(cfg);
+        app.IconRevision++;
+        Check(before != BadgeSettingsSnapshot.CaptureDock(cfg), "same-path image replacement triggers refresh");
+        app.IconPath = null;
+        Check(app.LaunchPath == @"C:\App\program.exe", "restore icon never changes launch entry");
+        Check(DockApplicationIcons.LoadAsync(null).GetAwaiter().GetResult() is null, "unset icon uses original");
+        Check(DockApplicationIcons.LoadAsync(Path.Combine(Path.GetTempPath(), Guid.NewGuid() + ".png")).GetAwaiter().GetResult() is null,
+            "missing custom image falls back without failing");
+        app.IconStyle = new AvatarStyle { AvatarText = "工作", AvatarBgHex = "#123456",
+            AvatarBgHex2 = "#654321", AvatarTextColorHex = "#FFFFFF", AvatarShape = AvatarShape.Hexagon,
+            AvatarBgStyle = AvatarBgStyle.LinearGradient, AvatarOverlay = AvatarOverlay.Ring };
+        var copy = app.IconStyle.Copy();
+        copy.AvatarText = "取消";
+        Check(app.IconStyle.AvatarText == "工作", "editing draft does not mutate saved style");
+        var styled = System.Text.Json.JsonSerializer.Deserialize<DockApplication>(System.Text.Json.JsonSerializer.Serialize(app))!;
+        Check(styled.IconStyle!.AvatarText == "工作" && styled.IconStyle.AvatarShape == AvatarShape.Hexagon &&
+            styled.IconStyle.AvatarOverlay == AvatarOverlay.Ring && styled.IconStyle.AvatarBgHex2 == "#654321", "custom style survives restart");
+        var browser = System.Text.Json.JsonSerializer.Deserialize<BrowserProfileSettings>("{\"AvatarText\":\"旧\",\"AvatarBgHex\":\"#112233\",\"Visible\":false}")!;
+        Check(browser.AvatarText == "旧" && browser.AvatarBgHex == "#112233" && !browser.Visible, "shared style keeps old browser JSON compatible");
+    }
+
+    private static void DockApplicationOrdering()
+    {
+        var a = new DockApplication { LaunchPath = @"C:\Apps\A.exe" };
+        var b = new DockApplication { LaunchPath = @"C:\Apps\B.lnk" };
+        var c = new DockApplication { LaunchPath = @"C:\Apps\C.lnk", ExecutablePath = b.ExecutablePath };
+        var entries = new List<DockApplication>();
+        Check(DockApplicationRuntime.Add(entries, a), "first entry added");
+        Check(!DockApplicationRuntime.Add(entries, new DockApplication { LaunchPath = @"c:\apps\a.EXE" }), "same launch entry case-insensitive duplicate");
+        Check(DockApplicationRuntime.Add(entries, b) && DockApplicationRuntime.Add(entries, c), "distinct shortcuts can share executable");
+        Check(DockApplicationRuntime.Move(entries, a.Id, c.Id, true) && entries.SequenceEqual(new[] { b, c, a }), "move to end");
+        Check(DockApplicationRuntime.Move(entries, a.Id, b.Id, false) && entries.SequenceEqual(new[] { a, b, c }), "move to start");
+        Check(!DockApplicationRuntime.Move(entries, a.Id, a.Id, true) && !DockApplicationRuntime.Move(entries, "missing", b.Id, false), "self/stale drag is no-op");
+        entries.Remove(b);
+        Check(entries.SequenceEqual(new[] { a, c }), "remove preserves remaining order");
+    }
+
+    private static void DockApplicationMatching()
+    {
+        var windows = new[]
+        {
+            new DockApplicationRuntime.Window(new IntPtr(1), 10, @"C:\A\tool.exe"),
+            new DockApplicationRuntime.Window(new IntPtr(2), 10, @"c:\a\TOOL.EXE"),
+            new DockApplicationRuntime.Window(new IntPtr(3), 20, @"C:\B\tool.exe"),
+        };
+        var matches = DockApplicationRuntime.Match(@"C:\A\tool.exe", windows);
+        Check(matches.Count == 2 && matches.All(w => w.ProcessId == 10), "same filename in another directory is not matched");
+        Check(DockApplicationRuntime.Match("", windows).Count == 0, "unresolved executable never matches");
+        Check(!ProfileDockService.ShouldMinimize(new IntPtr(1), matches.Select(w => w.Handle).ToList()), "multiple windows always show picker");
+        Check(ProfileDockService.ShouldMinimize(new IntPtr(3), new[] { new IntPtr(3) }), "single active window minimizes");
+        Check(!ProfileDockService.ShouldMinimize(new IntPtr(2), new[] { new IntPtr(3) }), "inactive window activates");
+    }
+
+    private static void DockApplicationImport()
+    {
+        string folder = Path.Combine(Path.GetTempPath(), "magidesk-dock-test-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(folder);
+        try
+        {
+            string executable = Path.Combine(folder, "中文 app.exe");
+            File.WriteAllBytes(executable, Array.Empty<byte>());
+            var app = DockApplicationRuntime.Import(executable);
+            Check(app.Name == "中文 app" && app.ExecutablePath == executable, "import retains spaces and Unicode");
+            var start = DockApplicationRuntime.CreateStartInfo(app);
+            Check(start.FileName == executable && start.UseShellExecute && start.Arguments == "", "launch does not use a command interpreter");
+            string shortcut = Path.Combine(folder, "带参数入口.lnk");
+            File.WriteAllBytes(shortcut, Array.Empty<byte>());
+            app.LaunchPath = shortcut;
+            Check(DockApplicationRuntime.CreateStartInfo(app).FileName == shortcut, "Shell receives shortcut unchanged, not a reconstructed command");
+            Check(!DockApplicationRuntime.IsSupportedPath("relative.exe") && !DockApplicationRuntime.IsSupportedPath(Path.Combine(folder, "file.txt")), "unsupported entries rejected");
+            File.Delete(shortcut);
+            bool rejected = false;
+            try { DockApplicationRuntime.CreateStartInfo(app); } catch (InvalidOperationException) { rejected = true; }
+            Check(rejected, "missing entry reports error before launch");
+        }
+        finally { Directory.Delete(folder, true); }
+    }
+
+    private static void IndependentDragRestore()
+    {
+        var hwnd = new IntPtr(987654);
+        var cfg = new AppConfig { ZonesEnabled = false, QuickGridEnabled = true, QuickGridRestoreOnDrag = true };
+        try
+        {
+            MagiDesk.Features.Zones.SnapMemory.Remember(hwnd, default, quickGrid: true);
+            Check(MagiDesk.Features.Zones.ZonesEngine.ShouldTrackDrag(cfg) && MagiDesk.Features.Zones.SnapMemory.CanRestore(hwnd, cfg),
+                "quick grid restore works with zones disabled");
+            cfg.QuickGridRestoreOnDrag = false;
+            Check(!MagiDesk.Features.Zones.ZonesEngine.ShouldTrackDrag(cfg) && !MagiDesk.Features.Zones.SnapMemory.CanRestore(hwnd, cfg), "both disabled skip drag tracking");
+            cfg.ZonesEnabled = true; cfg.ZonesRestoreOnDrag = true;
+            Check(!MagiDesk.Features.Zones.SnapMemory.CanRestore(hwnd, cfg), "zones restore cannot enable quick grid restore");
+            MagiDesk.Features.Zones.SnapMemory.SetSource(hwnd, false);
+            Check(MagiDesk.Features.Zones.SnapMemory.CanRestore(hwnd, cfg), "zone snap uses zone switch");
+            cfg.ZonesRestoreOnDrag = false; cfg.QuickGridRestoreOnDrag = true;
+            Check(!MagiDesk.Features.Zones.SnapMemory.CanRestore(hwnd, cfg), "quick grid switch cannot enable zones restore");
+            MagiDesk.Features.Zones.SnapMemory.SetSource(hwnd, true);
+            cfg.QuickGridEnabled = false;
+            Check(!MagiDesk.Features.Zones.SnapMemory.CanRestore(hwnd, cfg), "disabled quick grid never restores");
+            MagiDesk.Features.Zones.SnapMemory.Forget(hwnd);
+            cfg.QuickGridEnabled = true;
+            Check(!MagiDesk.Features.Zones.SnapMemory.CanRestore(hwnd, cfg), "forgotten window cannot restore");
+        }
+        finally { MagiDesk.Features.Zones.SnapMemory.Forget(hwnd); }
+    }
+
     public static int Run()
     {
         var tests = new (string Name, Action Run)[]
         {
+            ("linked resize groups: local/whole topology and invalid boundaries", LinkedResizeGroupTests.Discovery),
+            ("linked resize groups: shared constraints and outer bounds", LinkedResizeGroupTests.Geometry),
+            ("linked resize: geometry, shared gaps and constraints", LinkedWindowResizeTests.Geometry),
+            ("linked resize: opt-in setting and cancellation", LinkedWindowResizeTests.DefaultsAndCancellation),
+            ("zones: local alignment and explicit global cut identity", ZoneDividerTests.LocalAndGlobalCuts),
+            ("dock: running apps deduplicate pins, merge windows and retain order", () =>
+            {
+                var a = new DockApplicationRuntime.Window(new IntPtr(1), 1, @"C:\Apps\A.exe");
+                var b = new DockApplicationRuntime.Window(new IntPtr(2), 2, @"C:\Apps\B.exe");
+                var a2 = new DockApplicationRuntime.Window(new IntPtr(3), 1, @"c:\apps\a.EXE");
+                var none = new Dictionary<IntPtr, string>();
+                var visible = new HashSet<string>();
+                var pins = new[] { new DockApplication { ExecutablePath = @"C:\APPS\A.exe" } };
+                var result = DockRunningItems.Build(new[] { a, b, a2 }, pins, none, Array.Empty<ChromeProfile>(), visible, Array.Empty<DockItem>());
+                Check(result.Count == 1 && result[0].Application!.ExecutablePath == b.ExecutablePath && result[0].RunningOnly,
+                    "pinned apps excluded case-insensitively");
+                result = DockRunningItems.Build(new[] { a, b, a2 }, Array.Empty<DockApplication>(), none, Array.Empty<ChromeProfile>(), visible, Array.Empty<DockItem>());
+                Check(result.Count == 2, "multiple windows share one application entry");
+                var reversed = DockRunningItems.Build(new[] { b, a2, a }, Array.Empty<DockApplication>(), none, Array.Empty<ChromeProfile>(), visible, result);
+                Check(result.Select(i => i.Key).SequenceEqual(reversed.Select(i => i.Key)), "foreground changes never reorder entries");
+                var closed = DockRunningItems.Build(new[] { b }, Array.Empty<DockApplication>(), none, Array.Empty<ChromeProfile>(), visible, result);
+                Check(closed.Count == 1 && closed[0].Key == result[1].Key, "closed app removed without moving surviving entries");
+                Check(DockRunningItems.Build(Array.Empty<DockApplicationRuntime.Window>(), pins, none, Array.Empty<ChromeProfile>(), visible, result).Count == 0,
+                    "no open windows leaves no transient entries");
+            }),
+            ("dock: grouped browser accounts stay separate from running accounts", () =>
+            {
+                var first = new ChromeProfile { Browser = BrowserInfo.All[0], Directory = "Default", Name = "工作" };
+                var second = new ChromeProfile { Browser = BrowserInfo.All[0], Directory = "Profile 2", Name = "个人" };
+                var windows = new[] {
+                    new DockApplicationRuntime.Window(new IntPtr(1), 1, @"C:\Browser\chrome.exe"),
+                    new DockApplicationRuntime.Window(new IntPtr(2), 1, @"C:\Browser\chrome.exe"),
+                    new DockApplicationRuntime.Window(new IntPtr(3), 1, @"C:\Browser\chrome.exe") };
+                var map = new Dictionary<IntPtr, string> { [new IntPtr(1)] = first.Key, [new IntPtr(2)] = second.Key, [new IntPtr(3)] = second.Key };
+                var visible = new HashSet<string> { first.Key };
+                var result = DockRunningItems.Build(windows, Array.Empty<DockApplication>(), map, new[] { first, second }, visible, Array.Empty<DockItem>());
+                Check(result.Count == 1 && result[0].Profile == second, "grouped account excluded; ungrouped account retained and merged");
+                visible.Add(second.Key);
+                Check(DockRunningItems.Build(windows, Array.Empty<DockApplication>(), map, new[] { first, second }, visible, result).Count == 0,
+                    "adding account to group removes transient duplicate");
+                var cfg = new AppConfig();
+                string snapshot = BadgeSettingsSnapshot.CaptureDock(cfg);
+                cfg.DockShowRunningApplications = !cfg.DockShowRunningApplications;
+                Check(snapshot != BadgeSettingsSnapshot.CaptureDock(cfg), "running-app switch triggers refresh");
+            }),
+            ("config: only window drag enabled by default, saved switches preserved", () =>
+            {
+                var fresh = new AppConfig();
+                Check(fresh.WindowDragEnabled && !fresh.ZonesEnabled && !fresh.QuickGridEnabled &&
+                    !fresh.BrowserBadgeEnabled && !fresh.BrowserDockEnabled && !fresh.DesktopFencesEnabled &&
+                    !fresh.EdgeSnapEnabled && !fresh.AutoStartEnabled, "fresh install only enables window dragging");
+                var saved = System.Text.Json.JsonSerializer.Deserialize<AppConfig>(
+                    "{\"WindowDragEnabled\":false,\"ZonesEnabled\":true,\"QuickGridEnabled\":true,\"BrowserBadgeEnabled\":true,\"BrowserDockEnabled\":true,\"DesktopFencesEnabled\":true,\"EdgeSnapEnabled\":true}")!;
+                Check(!saved.WindowDragEnabled && saved.ZonesEnabled && saved.QuickGridEnabled &&
+                    saved.BrowserBadgeEnabled && saved.BrowserDockEnabled && saved.DesktopFencesEnabled && saved.EdgeSnapEnabled,
+                    "existing explicit choices are not overwritten");
+            }),
+            ("badge: copy chord requires Ctrl without extra modifiers", () =>
+            {
+                for (int mask = 0; mask < 16; mask++)
+                    Check(BadgeWindow.IsCopyChord((mask & 1) != 0, (mask & 2) != 0, (mask & 4) != 0, (mask & 8) != 0) == (mask == 1),
+                        "only Ctrl enables copy interaction");
+                Check(!BadgeWindow.IsBadgeHandle(IntPtr.Zero), "unknown window never excluded from dragging");
+            }),
+            ("quick grid: drag restore switches independent of zones", IndependentDragRestore),
+            ("dock collections: pin running applications", DockCollectionTests.PinRunningApplication),
+            ("dock collections: legacy migration and restart", DockCollectionTests.Migration),
+            ("dock collections: flat ordering across legacy groups", DockCollectionTests.FlatCollectionOrder),
+            ("dock library: browser and application categories", DockCollectionTests.LibraryCategories),
+            ("dock library: shared membership picker and exact removal", DockCollectionTests.MembershipTargets),
+            ("dock collections: unique membership within collection", DockCollectionTests.UniqueWithinCollection),
+            ("dock membership strip: click events can be handled", DockMembershipStripTests.ClickEvents),
+            ("floating dock: anchoring and inward growth", DockFloatingTests.Anchoring),
+            ("floating dock: snap and bounded activation area", DockFloatingTests.SnapAndReveal),
+            ("floating dock: defaults and configuration refresh", DockFloatingTests.DefaultsAndSnapshot),
+            ("floating dock: smart overlap and legacy display modes", DockFloatingTests.SmartAvoidance),
+            ("dock icons: DPI-aware shrink-only sizing and monitor overrides", DockFloatingTests.IconSizing),
+            ("dock refresh: immutable item snapshots detect visual and action changes", DockRefreshTests.ItemInvalidation),
+            ("browser badges: independent positions and default inheritance", BrowserBadgePositions),
+            ("browser badges: batch preserves identity and new styles persist", BadgeBatchAppearance),
+            ("dock: player instance matching", DockPlayerInstances),
+            ("dock collections: inactive edit isolation", DockCollectionTests.InactiveIsolation),
+            ("dock collections: batch membership", DockCollectionTests.BatchMembership),
+            ("dock collections: multi-selection order", DockCollectionTests.MultiSelectionOrder),
+            ("dock collections: deletion and recovery", DockCollectionTests.DeleteAndRecovery),
+            ("dock collections: empty layout and library", DockCollectionTests.EmptyAndLibrary),
+            ("dock collections: remove global references", DockCollectionTests.RemoveLibraryReferences),
+            ("dock collections: running apps use active pins", DockCollectionTests.RunningUsesActiveCollection),
+            ("dock: mixed groups projection and visibility", DockMixedProjection),
+            ("dock: mixed groups ordering matrix", DockMixedReorder),
+            ("dock: mixed groups moving and removal", DockMixedMoveAndRemove),
+            ("dock: mixed groups and ungrouped moves", DockMixedUngroupedMoves),
+            ("dock: mixed groups persistence and legacy config", DockMixedPersistence),
+            ("dock: mixed groups running deduplication", DockMixedRunningDeduplication),
+            ("dock: old config and independent application identity", DockApplicationConfig),
+            ("dock: custom icon persistence, refresh and missing-image fallback", DockCustomIcon),
+            ("dock: duplicate entries and stable reorder", DockApplicationOrdering),
+            ("dock: full executable path window matching", DockApplicationMatching),
+            ("dock: import and Shell launch validation", DockApplicationImport),
+            ("fences: background image persistence, inheritance and appearance scopes", BackgroundImageSettings),
+            ("fences: hierarchical whole-box and page appearance scopes", AppearanceScopes),
+            ("fences: created category override survives rename and resets on reorganize", CreatedCategoryOverride),
+            ("fences: drop onto folders uses filesystem transfer and Windows modifier rules", FolderDropRouting),
+            ("fences: initial desktop classification and previous empty default recovery", DesktopInitialClassification),
+            ("fences: default classification box and DPI-aware top-right placement", DesktopDefaultBox),
+            ("resize: slow target coalesces requests and retains release size", () => ResizeCoalescing().GetAwaiter().GetResult()),
+            ("resize: new drag discards old pending request", () => ResizeGeneration().GetAwaiter().GetResult()),
+            ("resize: dispose is nonblocking and drops pending resize", () => ResizeShutdown().GetAwaiter().GetResult()),
+            ("resize: symmetric edges, fixed center and minimum", SymmetricResizeGeometry),
             ("zones: proportional restore grab position", ProportionalRestore),
+            ("zones: protected first-placement DPI compensation", ProtectedSnapDpiSize),
+            ("drag: cross-DPI proportional grab point", CrossDpiMove),
             ("quick grid: preview clips and maps physical bounds", QuickGridPreviewGeometry),
             ("fences: unified desktop partition and opt-in persistence", UnifiedDesktop),
             ("fences: shell new-item attribution stays in originating folder", NewItemAttribution),
@@ -65,6 +862,7 @@ internal static class HeadlessTests
             ("desktop: namespace icons remain distinct from filesystem shortcuts", DesktopNamespaceIdentity),
             ("desktop: icon requests follow physical DPI size", DesktopIconPixels),
             ("desktop: alpha diagnostics distinguish invalid premultiplied edges", DesktopAlpha),
+            ("desktop: native thumbnail orientation and alpha", ThumbnailOrientationTests.Verify),
             ("fences: removed tabs recover as independent boxes", FenceTabs),
             ("fences: keyboard selection handles grid/list bounds", FenceKeyboard),
             ("fences: desktop layer preserves geometry and keyboard activation", FenceDesktopLayer),
@@ -112,6 +910,9 @@ internal static class HeadlessTests
         tests = tests.Concat(BoxClassificationTests.Cases()).ToArray();
         tests = tests.Concat(DesktopStartupTests.Cases()).ToArray();
         tests = tests.Concat(MouseHookThreadTests.Cases()).ToArray();
+        tests = tests.Concat(ReleaseReadinessTests.Cases()).ToArray();
+        tests = tests.Concat(UpdateTests.Cases()).ToArray();
+        tests = tests.Concat(SignedUpdateTests.Cases()).ToArray();
         foreach (var test in tests)
         {
             try { test.Run(); Console.WriteLine($"PASS {test.Name}"); }
@@ -280,7 +1081,7 @@ internal static class HeadlessTests
         Check(FenceKeyboardNavigation.Next(5, 10, 4, System.Windows.Input.Key.Home) == 0, "home incorrect");
         Check(FenceKeyboardNavigation.Next(5, 10, 4, System.Windows.Input.Key.End) == 9, "end incorrect");
         var cfg = new AppConfig();
-        Check(cfg.DesktopFencesHotkeyMods == 6 && cfg.DesktopFencesHotkeyVk == 0x46, "peek default hotkey incorrect");
+        Check(cfg.DesktopFencesHotkeyMods == 6 && cfg.DesktopFencesHotkeyVk == 0x44, "peek default hotkey incorrect");
         cfg.DesktopFencesHotkeyMods = 9;
         cfg.DesktopFencesHotkeyVk = 0;
         var restored = System.Text.Json.JsonSerializer.Deserialize<AppConfig>(System.Text.Json.JsonSerializer.Serialize(cfg))!;
@@ -822,7 +1623,7 @@ internal static class HeadlessTests
         }
         c.DesktopFencesEnabled = true; c.BrowserDockX = 23; c.WindowWidth = 99;
         Check(before == BadgeSettingsSnapshot.CaptureDock(c), "unrelated save rebuilds dock");
-        c.BrowserDockEnabled = false;
+        c.BrowserDockEnabled = !c.BrowserDockEnabled;
         Check(before != BadgeSettingsSnapshot.CaptureDock(c), "dock toggle missed");
         c.BrowserProfiles["edge:Default"] = new(); before = BadgeSettingsSnapshot.CaptureDock(c);
         c.BrowserProfiles["edge:Default"].AvatarText = "AB";

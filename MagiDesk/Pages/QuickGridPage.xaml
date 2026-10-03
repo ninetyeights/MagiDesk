@@ -10,33 +10,28 @@
                   VerticalScrollBarVisibility="Auto"
                   HorizontalScrollBarVisibility="Disabled"
                   Padding="0">
-        <Grid Margin="16,16,20,16">
+        <Grid Margin="16,0,20,16">
             <StackPanel HorizontalAlignment="Stretch" MaxWidth="1200">
 
-                <TextBlock Text="快速网格" FontSize="28" FontWeight="SemiBold"/>
-                <TextBlock Text="按快捷键弹出缩略图 → 拖动选格 → 活动窗口按选中格子的矩形对齐。"
-                           Foreground="{DynamicResource TextFillColorSecondaryBrush}"
-                           Margin="0,2,0,20"/>
+                <Grid Margin="0,0,0,14">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Margin="0,0,24,0">
+                        <TextBlock Text="快速网格" FontSize="28" FontWeight="SemiBold"/>
+                        <TextBlock Text="按快捷键弹出缩略图 → 拖动选格 → 活动窗口按选中格子的矩形对齐。" TextWrapping="Wrap"
+                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="0,2,0,0"/>
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" VerticalAlignment="Center" HorizontalAlignment="Center">
+                        <TextBlock Text="启用" FontSize="12" HorizontalAlignment="Center" Margin="0,0,0,2"
+                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                        <ui:ToggleSwitch x:Name="TsEnabled" HorizontalAlignment="Center"
+                                         Checked="Enabled_Changed" Unchecked="Enabled_Changed"/>
+                    </StackPanel>
+                </Grid>
 
                 <!-- Enable -->
-                <ui:Card HorizontalAlignment="Stretch" Padding="18,16" Margin="0,0,0,12">
-                    <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="Auto"/>
-                        </Grid.ColumnDefinitions>
-                        <StackPanel Grid.Column="0" VerticalAlignment="Center">
-                            <TextBlock Text="启用快速网格" FontWeight="SemiBold"/>
-                            <TextBlock Text="关闭后全局快捷键失效"
-                                       FontSize="12"
-                                       Foreground="{DynamicResource TextFillColorSecondaryBrush}"
-                                       Margin="0,2,0,0"/>
-                        </StackPanel>
-                        <ui:ToggleSwitch x:Name="TsEnabled" Grid.Column="1"
-                                         VerticalAlignment="Center"
-                                         Checked="Enabled_Changed" Unchecked="Enabled_Changed"/>
-                    </Grid>
-                </ui:Card>
 
                 <StackPanel x:Name="BodyGroup">
 

@@ -23,6 +23,8 @@ namespace MagiDesk
         private EdgeSnapEngine? _edgeSnap;
         private DesktopFenceService? _desktopFences;
         private TrayService? _tray;
+        private Features.Updates.UpdateService? _updates;
+        internal static Features.Updates.UpdateService? Updates => ((App)Current)._updates;
         private BrowserBadgeService? _browserBadges;
         private ProfileDockService? _profileDock;
         public static QuickGridService?     QuickGrid     => ((App)Current)._quickGrid;
@@ -31,6 +33,9 @@ namespace MagiDesk
         public static BrowserBadgeService?  BrowserBadges => ((App)Current)._browserBadges;
         public static ProfileDockService?   ProfileDock   => ((App)Current)._profileDock;
         private DispatcherTimer? _reinstallTimer;
+        private RegisteredWaitHandle? _showWait;
+        private bool _configSubscribed;
+        private bool _ownsMutex;
 
         // Single-instance plumbing: if a second copy launches, it signals
         // _showEvent and exits; the owning instance wakes up and surfaces
@@ -66,6 +71,12 @@ namespace MagiDesk
 
         protected override void OnStartup(StartupEventArgs e)
         {
+            if (e.Args.Length == 3 && e.Args[0] == "--install-update")
+            {
+                ShutdownMode = ShutdownMode.OnExplicitShutdown;
+                Shutdown(Features.Updates.UpdateInstaller.Run(e.Args[1], e.Args[2]));
+                return;
+            }
             if (e.Args.Length == 3 && e.Args[0] == DesktopSurfaceLease.Argument)
             {
                 Infrastructure.StartupTrace.Start(null, "desktop-guard");
@@ -102,15 +113,16 @@ namespace MagiDesk
                 Shutdown();
                 return;
             }
+            _ownsMutex = true;
             Infrastructure.StartupTrace.Start(Dispatcher, "app");
             using var startupTrace = Infrastructure.StartupTrace.Measure("app.startup");
             using (Infrastructure.StartupTrace.Measure("app.recover-probe"))
                 Native.DesktopIconVisibilityProbe.RecoverPending();
             // Listen for the show-signal on a background wait; dispatches back
             // to the UI thread to raise the main window.
-            ThreadPool.RegisterWaitForSingleObject(_showEvent, (_, _) =>
+            _showWait = ThreadPool.RegisterWaitForSingleObject(_showEvent, (_, _) =>
             {
-                Dispatcher.BeginInvoke(new Action(() => _tray?.ShowMain()));
+                if (!Dispatcher.HasShutdownStarted) Dispatcher.BeginInvoke(new Action(() => { if (!IsReallyExiting) _tray?.ShowMain(); }));
             }, null, Timeout.Infinite, executeOnlyOnce: false);
 
             // App.xaml hard-codes Theme="Light" so the resource dictionary
@@ -129,88 +141,81 @@ namespace MagiDesk
 
             LogDpiContext();
 
-            try
+            AppConfig.SaveFailed += OnSaveFailed;
+            _configSubscribed = true;
+            var errors = new List<string>();
+            _tray = Infrastructure.ServiceLifecycle.Start("系统托盘", () => new TrayService(), service => service.Start(), errors);
+            _updates = Infrastructure.ServiceLifecycle.Start("自动更新", () => new Features.Updates.UpdateService(), service => service.Start(), errors);
+            _altDragger = Infrastructure.ServiceLifecycle.Start("窗口拖动", () => new AltDragger(), service => service.Start(), errors);
+            if (_altDragger is not null)
             {
-                _altDragger = new AltDragger();
-                _altDragger.Start();
-
-                // Re-assert hook dominance every 2s to stay ahead of tools like
-                // StrokesPlus that install their own WH_MOUSE_LL and may land in
-                // front of us, swallowing mousemoves during Alt+RMB drags.
-                _reinstallTimer = new DispatcherTimer(DispatcherPriority.Background)
-                {
-                    Interval = TimeSpan.FromSeconds(2),
-                };
+                _reinstallTimer = new DispatcherTimer(DispatcherPriority.Background) { Interval = TimeSpan.FromSeconds(2) };
                 _reinstallTimer.Tick += (_, _) => _altDragger?.Reinstall();
                 _reinstallTimer.Start();
-
-                // Zones engine — FancyZones-style snapping on Shift+drag.
-                _zonesEngine = new ZonesEngine(Dispatcher);
-                _zonesEngine.AttachTo(_altDragger);
-                _zonesEngine.Start();
-
-                // Edge snap — magnetic snapping to monitor/window edges while
-                // Alt is held during an Alt-drag move. Rides AltDragger's loop;
-                // backs off while Shift is held so Zones keeps that gesture.
-                _edgeSnap = new EdgeSnapEngine(Dispatcher);
-                _edgeSnap.AttachTo(_altDragger);
-
-                // Desktop fences — custom-rendered icon boxes (hides the system
-                // desktop icons while enabled). Off unless the user opts in.
-                _desktopFences = new DesktopFenceService(Dispatcher);
-                _desktopFences.Start();
-                Infrastructure.StartupTrace.Mark("app.fences-scheduled");
-
-                // Quick Grid — hotkey-triggered ad-hoc rows×cols picker.
-                _quickGrid = new QuickGridService(Dispatcher);
-                _quickGrid.Start();
-
-                // Browser badges — per-Chrome-profile floating indicators.
-                _browserBadges = new BrowserBadgeService(Dispatcher);
-                using (Infrastructure.StartupTrace.Measure("app.browser-badges")) _browserBadges.Start();
-
-                // Profile dock — taskbar-like floating strip of Chrome profile
-                // avatars, click to launch or focus the profile's windows.
-                _profileDock = new ProfileDockService(Dispatcher);
-                using (Infrastructure.StartupTrace.Measure("app.dock")) _profileDock.Start();
-
-                // Tray icon + close-to-tray (MainWindow wires itself via its
-                // Loaded handler so we don't have to race Application.Activated).
-                _tray = new TrayService();
-                _tray.Start();
-
-                // Reconcile auto-start: if the user removed the Run entry via
-                // Task Manager, fall back to that (registry wins); otherwise
-                // make the registry match the saved config so a fresh install
-                // restoring config.json re-registers the entry.
+                _zonesEngine = Infrastructure.ServiceLifecycle.Start("窗口分区", () => new ZonesEngine(Dispatcher), service =>
+                { service.AttachTo(_altDragger); service.Start(); }, errors);
+                _edgeSnap = Infrastructure.ServiceLifecycle.Start("边缘吸附", () => new EdgeSnapEngine(Dispatcher), service => service.AttachTo(_altDragger), errors);
+            }
+            else errors.Add("窗口分区、边缘吸附：窗口拖动服务不可用，本次未启动。");
+            _desktopFences = Infrastructure.ServiceLifecycle.Start("桌面盒子", () => new DesktopFenceService(Dispatcher), service => service.Start(), errors);
+            _quickGrid = Infrastructure.ServiceLifecycle.Start("快速网格", () => new QuickGridService(Dispatcher), service => service.Start(), errors);
+            _browserBadges = Infrastructure.ServiceLifecycle.Start("浏览器微标", () => new BrowserBadgeService(Dispatcher), service => service.Start(), errors);
+            _profileDock = Infrastructure.ServiceLifecycle.Start("Dock", () => new ProfileDockService(Dispatcher), service => service.Start(), errors);
+            try
+            {
                 bool runReg = StartupRegistration.IsEnabled();
                 if (runReg != AppConfig.Current.AutoStartEnabled)
                 {
                     if (runReg) { AppConfig.Current.AutoStartEnabled = true; AppConfig.Current.Save(); }
-                    else        StartupRegistration.SetEnabled(AppConfig.Current.AutoStartEnabled);
+                    else StartupRegistration.SetEnabled(AppConfig.Current.AutoStartEnabled);
                 }
             }
-            catch (Exception ex)
+            catch (Exception ex) { errors.Add($"开机自启：{ex.Message}"); }
+            var recovery = AppConfig.RecoveryNotice;
+            if (errors.Count > 0 || recovery is not null)
+                Dispatcher.BeginInvoke(DispatcherPriority.ContextIdle, new Action(() =>
+                {
+                    if (IsReallyExiting) return;
+                    string message = recovery ?? "";
+                    if (errors.Count > 0) message += "\n以下功能未能启动，其他功能可继续使用。请重启重试。\n" + string.Join("\n", errors);
+                    MessageBox.Show(message.Trim(), "MagiDesk 启动提示", MessageBoxButton.OK, MessageBoxImage.Warning);
+                }));
+        }
+
+        private int _saveNoticePending;
+        private void OnSaveFailed(string error)
+        {
+            if (Interlocked.Exchange(ref _saveNoticePending, 1) != 0) return;
+            Dispatcher.BeginInvoke(new Action(() =>
             {
-                MessageBox.Show($"AltDragger 启动失败：{ex.Message}", "MagiDesk",
-                    MessageBoxButton.OK, MessageBoxImage.Error);
-            }
+                try
+                {
+                    if (IsReallyExiting || AppConfig.LastSaveError is null) return;
+                    MessageBox.Show("本次设置未保存，重启后可能丢失。\n请检查磁盘空间和配置目录权限，然后在设置页点击“重试保存”。\n\n" + AppConfig.LastSaveError,
+                        "MagiDesk 保存失败", MessageBoxButton.OK, MessageBoxImage.Warning);
+                }
+                finally { Interlocked.Exchange(ref _saveNoticePending, 0); }
+            }));
         }
 
         protected override void OnExit(ExitEventArgs e)
         {
-            _reinstallTimer?.Stop();
-            _desktopFences?.Dispose();
-            _edgeSnap?.Dispose();
-            _altDragger?.Dispose();
-            _zonesEngine?.Dispose();
-            _quickGrid?.Dispose();
-            _browserBadges?.Dispose();
-            _profileDock?.Dispose();
-            _tray?.Dispose();
-            try { _instanceMutex?.ReleaseMutex(); } catch { }
-            _instanceMutex?.Dispose();
-            _showEvent?.Dispose();
+            IsReallyExiting = true;
+            if (_configSubscribed) AppConfig.SaveFailed -= OnSaveFailed;
+            Infrastructure.ServiceLifecycle.Stop("唤醒监听", () => _showWait?.Unregister(null));
+            Infrastructure.ServiceLifecycle.Stop("定时器", () => _reinstallTimer?.Stop());
+            Infrastructure.ServiceLifecycle.Stop("自动更新", () => _updates?.Dispose());
+            Infrastructure.ServiceLifecycle.Stop("桌面盒子", () => _desktopFences?.Dispose());
+            Infrastructure.ServiceLifecycle.Stop("Dock", () => _profileDock?.Dispose());
+            Infrastructure.ServiceLifecycle.Stop("边缘吸附", () => _edgeSnap?.Dispose());
+            Infrastructure.ServiceLifecycle.Stop("窗口分区", () => _zonesEngine?.Dispose());
+            Infrastructure.ServiceLifecycle.Stop("窗口拖动", () => _altDragger?.Dispose());
+            Infrastructure.ServiceLifecycle.Stop("快速网格", () => _quickGrid?.Dispose());
+            Infrastructure.ServiceLifecycle.Stop("浏览器微标", () => _browserBadges?.Dispose());
+            Infrastructure.ServiceLifecycle.Stop("系统托盘", () => _tray?.Dispose());
+            Infrastructure.ServiceLifecycle.Stop("单实例锁", () => { if (_ownsMutex) _instanceMutex?.ReleaseMutex(); });
+            Infrastructure.ServiceLifecycle.Stop("单实例资源", () => _instanceMutex?.Dispose());
+            Infrastructure.ServiceLifecycle.Stop("唤醒事件", () => _showEvent?.Dispose());
             base.OnExit(e);
         }
 

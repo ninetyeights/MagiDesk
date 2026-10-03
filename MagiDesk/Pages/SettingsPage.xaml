@@ -8,7 +8,7 @@
                   VerticalScrollBarVisibility="Auto"
                   HorizontalScrollBarVisibility="Disabled"
                   Padding="0">
-        <Grid Margin="16,16,20,16">
+        <Grid Margin="16,0,20,16">
             <StackPanel HorizontalAlignment="Stretch" MaxWidth="1000">
 
                 <TextBlock Text="设置"
@@ -60,6 +60,14 @@
                                          Checked="Tray_Changed"
                                          Unchecked="Tray_Changed"/>
                     </Grid>
+                </ui:Card>
+
+                <ui:Card HorizontalAlignment="Stretch" Padding="18,16" Margin="0,0,0,12">
+                    <StackPanel>
+                        <TextBlock Text="配置保存" FontWeight="SemiBold"/>
+                        <TextBlock x:Name="TxtSaveStatus" TextWrapping="Wrap" Margin="0,6,0,8"/>
+                        <Button Content="重试保存" Click="RetrySave_Click" HorizontalAlignment="Left"/>
+                    </StackPanel>
                 </ui:Card>
 
                 <ui:InfoBar HorizontalAlignment="Stretch"

@@ -28,6 +28,8 @@ public partial class BadgeWindow : Window
     private static extern IntPtr SetWindowLongPtr64(IntPtr h, int i, IntPtr v);
 
     private readonly IntPtr _target;
+    private string _browserId = "";
+    private bool CanAdjustPosition => BrowserBadgePosition.CanAdjust(AppConfig.Current, _browserId);
     private int _lastX = int.MinValue, _lastY, _lastW, _lastH;
 
     // No margin — window HWND hugs the Pill tightly. Saved drag offsets
@@ -46,6 +48,7 @@ public partial class BadgeWindow : Window
     public BadgeWindow(IntPtr target)
     {
         InitializeComponent();
+        MagiDesk.Native.AuxiliaryWindow.Attach(this);
         _target = target;
         // Owner set pre-HWND so WPF applies it at window creation time.
         if (target != IntPtr.Zero)
@@ -62,26 +65,34 @@ public partial class BadgeWindow : Window
         // so the badge can become interactive when the user unlocks it.
         SetWindowLong(h, GWL_EXSTYLE, ex | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE);
         ApplyUnlockState(AppConfig.Current.BrowserBadgeUnlocked);
+        StartCopyInteraction(h);
     }
 
     /// <summary>Toggle the click-through style + cursor hint. When unlocked
     /// the badge receives mouse events (for drag); when locked it's fully
     /// click-through and visible only.</summary>
-    private void ApplyUnlockState(bool unlocked)
+    internal void ApplyUnlockState(bool unlocked)
     {
+        unlocked = unlocked && CanAdjustPosition;
         var h = new WindowInteropHelper(this).Handle;
         if (h == IntPtr.Zero) return;
         int ex = GetWindowLong(h, GWL_EXSTYLE);
-        ex = unlocked ? (ex & ~WS_EX_TRANSPARENT) : (ex | WS_EX_TRANSPARENT);
+        bool copy = CopyModifiersDown();
+        ex = unlocked || copy || _copyPressed ? (ex & ~WS_EX_TRANSPARENT) : (ex | WS_EX_TRANSPARENT);
         SetWindowLong(h, GWL_EXSTYLE, ex);
-        Pill.Cursor = unlocked ? System.Windows.Input.Cursors.SizeAll : null;
+        Pill.Cursor = copy ? System.Windows.Input.Cursors.Hand : unlocked ? System.Windows.Input.Cursors.SizeAll : null;
+        bool hasCursor = NativeMethods.GetCursorPos(out var cursor);
+        UpdateHoverOpacity(copy, hasCursor, cursor);
     }
 
     /// <summary>Apply profile data + user overrides. Safe to call repeatedly.</summary>
     public void ApplyProfile(ChromeProfile profile, BrowserProfileSettings settings, int height)
     {
+        _copyName = profile.Name;
+        _browserId = profile.Browser.Id;
         // Color: user override > Chrome theme > neutral blue.
         Color bg = ParseHex(settings.ColorHex)
+                   ?? ParseHex(settings.ThemeColorHex)
                    ?? (profile.ThemeColorRgb is int rgb ? FromRgb(rgb) : Color.FromRgb(0x00, 0x78, 0xD4));
         // Pill background is what you'd call the "color block". When the name
         // is hidden the pill should be visually absent — only the avatar
@@ -227,6 +238,7 @@ public partial class BadgeWindow : Window
         // profile's highlight color + first-letter glyph. Falls back to the
         // warm-yellow DefaultAvatarBg only if Chrome hasn't set one yet.
         Color avatarBg = ParseHex(settings.AvatarBgHex)
+                         ?? ParseHex(settings.ThemeColorHex)
                          ?? (profile.ThemeColorRgb is int avRgb ? FromRgb(avRgb) : DefaultAvatarBg);
         AvatarHost.Background = BuildAvatarBrush(avatarBg, settings);
         Color avatarFg = ParseHex(settings.AvatarTextColorHex)
@@ -299,7 +311,7 @@ public partial class BadgeWindow : Window
     /// Shapes use the secondary/accent color for high visibility against the
     /// avatar background. Called from ApplyProfile and reused by the settings
     /// preview to keep rendering paths consistent.</summary>
-    internal static void RenderOverlay(Canvas canvas, BrowserProfileSettings s,
+    internal static void RenderOverlay(Canvas canvas, AvatarStyle s,
                                        Color primary, double avatarSize, bool rect)
     {
         canvas.Children.Clear();
@@ -397,7 +409,7 @@ public partial class BadgeWindow : Window
     /// gradient styles → two-stop LinearGradientBrush or RadialGradientBrush
     /// using the user's primary + secondary color (or auto-darkened primary
     /// when the secondary isn't set).</summary>
-    internal static Brush BuildAvatarBrush(Color primary, BrowserProfileSettings s)
+    internal static Brush BuildAvatarBrush(Color primary, AvatarStyle s)
     {
         if (s.AvatarBgStyle == AvatarBgStyle.Solid)
             return new SolidColorBrush(primary);
@@ -409,6 +421,10 @@ public partial class BadgeWindow : Window
             AvatarBgStyle.RadialGradient => new RadialGradientBrush(primary, secondary),
             AvatarBgStyle.Horizontal     => new LinearGradientBrush(primary, secondary, 90),
             AvatarBgStyle.Vertical       => new LinearGradientBrush(primary, secondary, 180),
+            AvatarBgStyle.Split => SplitBrush(primary, secondary, new Point(1, 0)),
+            AvatarBgStyle.DiagonalSplit => SplitBrush(primary, secondary, new Point(1, 1)),
+            AvatarBgStyle.Spotlight => new RadialGradientBrush(primary, secondary)
+                { GradientOrigin = new Point(0.2, 0.15), Center = new Point(0.2, 0.15), RadiusX = 1, RadiusY = 1 },
             _                            => new SolidColorBrush(primary),
         };
     }
@@ -428,6 +444,12 @@ public partial class BadgeWindow : Window
     /// coordinates — WPF's Left/Top on a layered (AllowsTransparency) window
     /// is interpreted in primary-monitor DIPs and mis-positions across
     /// monitors with different DPI scales.</summary>
+    private static Brush SplitBrush(Color first, Color second, Point end)
+        => new LinearGradientBrush(new GradientStopCollection
+        {
+            new(first, 0), new(first, 0.5), new(second, 0.5), new(second, 1),
+        }, new Point(0, 0), end);
+
     public void UpdatePosition()
     {
         // While the user is dragging this badge, ignore Chrome LocationChange
@@ -489,8 +511,9 @@ public partial class BadgeWindow : Window
         // pixels so the visual gap from the Chrome frame is identical
         // regardless of monitor DPI.
         var cfg = AppConfig.Current;
-        int insetRight = (int)Math.Round(cfg.BrowserBadgeOffsetRight * scaleX);
-        int insetTop   = (int)Math.Round(cfg.BrowserBadgeOffsetTop   * scaleY);
+        var position = BrowserBadgePosition.Resolve(cfg, _browserId);
+        int insetRight = (int)Math.Round(position.Right * scaleX);
+        int insetTop   = (int)Math.Round(position.Top * scaleY);
         // Compute where Pill's top-left should be, then back out the
         // window's top-left by the shadow margin.
         int pillTargetLeft = r.Right - pillWPx - insetRight;
@@ -517,7 +540,15 @@ public partial class BadgeWindow : Window
 
     private void Pill_MouseDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
     {
-        if (!AppConfig.Current.BrowserBadgeUnlocked) return;
+        if (CopyModifiersDown())
+        {
+            _copyPressed = true;
+            Pill.CaptureMouse();
+            e.Handled = true;
+            CopyProfileName();
+            return;
+        }
+        if (!CanAdjustPosition) return;
         var hwnd = new WindowInteropHelper(this).Handle;
         if (hwnd == IntPtr.Zero) return;
         if (!NativeMethods.GetCursorPos(out _dragStartCursor)) return;
@@ -546,6 +577,26 @@ public partial class BadgeWindow : Window
     }
 
     private void Pill_MouseUp(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        if (_copyPressed)
+        {
+            _copyPressed = false;
+            Pill.ReleaseMouseCapture();
+            ApplyUnlockState(AppConfig.Current.BrowserBadgeUnlocked);
+            e.Handled = true;
+            return;
+        }
+        if (_dragging) e.Handled = true;
+        FinishPositionDrag();
+    }
+
+    internal void CompletePositionAdjustment()
+    {
+        FinishPositionDrag();
+        ApplyUnlockState(false);
+    }
+
+    private void FinishPositionDrag()
     {
         if (!_dragging) return;
         _dragging = false;
@@ -583,10 +634,8 @@ public partial class BadgeWindow : Window
         double offRight = (cr.Right - pillRightPx) / scaleX;
         double offTop   = (pillTopPx - cr.Top)     / scaleY;
 
-        AppConfig.Current.BrowserBadgeOffsetRight = offRight;
-        AppConfig.Current.BrowserBadgeOffsetTop   = offTop;
+        BrowserBadgePosition.Store(AppConfig.Current, _browserId, offRight, offTop);
         AppConfig.Current.Save();
-        e.Handled = true;
     }
 
     // ---------------------------------------------------------- colour utils

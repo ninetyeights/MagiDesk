@@ -1,0 +1,16 @@
+<Page x:Class="MagiDesk.Pages.BrowserLaunchPage"
+      xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+      xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+      Title="浏览器启动参数" x:Name="PageRoot" Background="Transparent">
+    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                  MaxHeight="{Binding ActualHeight, ElementName=PageRoot}" Padding="0">
+        <Grid Margin="16,0,20,16">
+            <StackPanel MaxWidth="1100" HorizontalAlignment="Stretch">
+                <TextBlock Text="浏览器启动参数" FontSize="28" FontWeight="SemiBold"/>
+                <TextBlock Text="分别设置各浏览器的附加参数。含空格的值请使用双引号。仅在 MagiDesk 发起启动时使用；聚焦已有窗口不会重新应用参数，部分参数需完全退出浏览器后生效。"
+                           TextWrapping="Wrap" Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="0,2,0,16"/>
+                <StackPanel x:Name="LaunchArgumentsPanel"/>
+            </StackPanel>
+        </Grid>
+    </ScrollViewer>
+</Page>

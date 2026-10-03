@@ -7,7 +7,7 @@
     <ScrollViewer Background="Transparent"
                   VerticalScrollBarVisibility="Auto"
                   Padding="0">
-        <Grid Margin="16,16,20,16">
+        <Grid Margin="16,0,20,16">
             <StackPanel HorizontalAlignment="Stretch" MaxWidth="1000">
             <TextBlock Text="关于 MagiDesk"
                        FontSize="28" FontWeight="SemiBold"/>
@@ -25,6 +25,23 @@
                 </StackPanel>
             </ui:Card>
 
+            <ui:Card HorizontalAlignment="Stretch" Padding="18,16" Margin="0,0,0,12">
+                <StackPanel>
+                    <TextBlock Text="应用更新" FontWeight="SemiBold"/>
+                    <CheckBox x:Name="AutoUpdates" Content="自动检查更新" Margin="0,10,0,8"
+                              Checked="AutoUpdates_Changed" Unchecked="AutoUpdates_Changed"/>
+                    <TextBlock Text="从 GitHub 检查更新，下载和安装由你确认。测试版接收测试版及正式版，正式版只接收正式版。"
+                               TextWrapping="Wrap" Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                    <TextBlock x:Name="UpdateStatus" TextWrapping="Wrap" Margin="0,10,0,10"/>
+                    <WrapPanel>
+                        <Button x:Name="CheckUpdate" Content="检查更新" Click="CheckUpdate_Click" Margin="0,0,8,8"/>
+                        <Button x:Name="DownloadUpdate" Content="下载更新" Click="DownloadUpdate_Click" Margin="0,0,8,8"/>
+                        <Button x:Name="InstallUpdate" Content="退出并安装" Click="InstallUpdate_Click" Margin="0,0,8,8"/>
+                        <Button x:Name="CancelUpdate" Content="取消" Click="CancelUpdate_Click" Margin="0,0,8,8"/>
+                    </WrapPanel>
+                    <TextBlock x:Name="ReleaseNotes" TextWrapping="Wrap" MaxHeight="240" TextTrimming="CharacterEllipsis"/>
+                </StackPanel>
+            </ui:Card>
             <ui:Card HorizontalAlignment="Stretch" Padding="18,16">
                 <StackPanel>
                     <TextBlock Text="已实现的工具" FontWeight="SemiBold" Margin="0,0,0,8"/>

@@ -19,6 +19,7 @@ internal sealed class SnapGuideWindow : Window
 
     public SnapGuideWindow()
     {
+        MagiDesk.Native.AuxiliaryWindow.Attach(this);
         WindowStyle = WindowStyle.None;
         AllowsTransparency = true;
         Background = EdgeBrush;

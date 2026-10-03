@@ -66,10 +66,24 @@ public sealed partial class DesktopFenceService : IDisposable
             _boxOrderQueued = false;
             if (_disposed || !_active || _frontBoxId is null || !_windows.TryGetValue(_frontBoxId, out var front)) return;
             var hwnd = new System.Windows.Interop.WindowInteropHelper(front).Handle;
-            uint flags = NativeConstants.SWP_NOMOVE | NativeConstants.SWP_NOSIZE | NativeConstants.SWP_NOACTIVATE;
             if (IsPeeking)
             {
-                NativeMethods.SetWindowPos(hwnd, NativeMethods.HWND_TOPMOST, 0, 0, 0, 0, flags);
+                if (ShellContextMenu.IsOpen)
+                {
+                    MagiDesk.Infrastructure.DiagnosticLog.Write("FENCE-PEEK skipped deferred raise while shell menu is open\n");
+                    return;
+                }
+                // Activation/WPF may reorder more than the active HWND. Restore
+                // the entire summoned group, with the focused box raised last.
+                _applyingBoxOrder = true;
+                try
+                {
+                    foreach (var other in _windows.Values)
+                        if (!ReferenceEquals(other, front) && other.IsVisible)
+                            other.RaiseForPeek("group-after-activation");
+                    front.RaiseForPeek("focused-after-group");
+                }
+                finally { _applyingBoxOrder = false; }
                 return;
             }
             // Never sink the clicked box: doing so temporarily exposes a lower
@@ -211,6 +225,8 @@ public sealed partial class DesktopFenceService : IDisposable
         if (DesktopTabMigration.ConvertToBoxes(AppConfig.Current.DesktopBoxes))
             AppConfig.Current.Save();
         EnsureUnsorted();
+        if (DesktopBoxDefaults.EnsureClassificationBox(AppConfig.Current, Features.Zones.MonitorEnumerator.All()))
+            AppConfig.Current.Save();
         StartDesktopSurfaceWatching();
         Render();
 
@@ -402,6 +418,18 @@ public sealed partial class DesktopFenceService : IDisposable
     public void AssignItem(string path, string boxId)
         => AssignItems(new[] { path }, boxId);
 
+    internal void AssignCreatedItem(string path, string boxId)
+    {
+        var boxes = AppConfig.Current.DesktopBoxes;
+        var target = boxes.FirstOrDefault(b => b.Id == boxId);
+        if (target is null || target.IsUnsorted) return;
+        if (target.FolderPath is null)
+            DesktopMembershipRecovery.Assign(boxes, target, new[] { path }, _membershipSnapshot);
+        BoxClassification.KeepCreatedItem(target, path);
+        AppConfig.Current.Save();
+        if (_active) Render();
+    }
+
     internal void AssignItems(IEnumerable<string> paths, string boxId)
     {
         var boxes = AppConfig.Current.DesktopBoxes;
@@ -538,6 +566,7 @@ public sealed partial class DesktopFenceService : IDisposable
                 foreach (var box in cfg.DesktopBoxes.Where(b => b.FolderPath is not null))
                     if (_windows.TryGetValue(box.Id, out var portal)) portal.RefreshFolder();
             }
+            if (DesktopBoxDefaults.AssignInitialContents(cfg, items, _membershipSnapshot)) cfg.Save();
             if (_unifiedSurface) RenderDesktopSurface(items, t.Result.Positions);
             foreach (var box in cfg.DesktopBoxes)
             {

@@ -48,10 +48,17 @@ internal sealed partial class FenceBoxWindow
     {
         if (_desktopSurface || _closed || !MagiDesk.Native.NativeMethods.GetWindowRect(Hwnd, out var native)) return;
         var before = new Rect(native.Left, native.Top, native.Right - native.Left, native.Bottom - native.Top);
-        var bounds = DesktopMonitorLayout.RecoverBox(before, monitors);
+        // Restore the saved physical origin first; Windows may already have
+        // moved this HWND onto the temporary remote display.
+        var saved = new Rect(_box.X, _box.Y, before.Width, before.Height);
+        var bounds = DesktopMonitorLayout.RecoverBox(saved, monitors);
         if (bounds == before) return;
+        _saveTimer.Stop();
         MagiDesk.Native.NativeMethods.SetWindowPos(Hwnd, IntPtr.Zero, (int)bounds.X, (int)bounds.Y, (int)bounds.Width, (int)bounds.Height,
             SWP_NOZORDER | SWP_NOACTIVATE);
+        Width = _box.W;
+        Height = _collapsed ? CollapsedHeight : _box.H;
+        MagiDesk.Infrastructure.DiagnosticLog.Write($"DESKTOP-BOX recovery id={_box.Id} before={before} target={bounds} saved=({_box.X},{_box.Y},{_box.W},{_box.H})\n");
     }
 
     internal void ImportDesktopPositions(IReadOnlyDictionary<string, Point> positions)

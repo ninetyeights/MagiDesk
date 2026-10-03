@@ -1,6 +1,3 @@
-using System.IO;
-using System.Runtime.InteropServices;
-using System.Text;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -19,10 +16,7 @@ public partial class QuickGridPage : Page
     private bool _loading;
     private bool _recording;
 
-    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    private static extern bool SystemParametersInfo(uint uiAction, uint uiParam, StringBuilder pvParam, uint fWinIni);
-    private const uint SPI_GETDESKWALLPAPER = 0x0073;
-    private static ImageBrush? _wallpaperBrush; // cached
+    private Dictionary<string, BitmapImage?> _wallpapers = new();
 
     public QuickGridPage()
     {
@@ -240,6 +234,8 @@ public partial class QuickGridPage : Page
     {
         MonitorTabs.Items.Clear();
         var monitors = MonitorEnumerator.All();
+        _previewHosts.Clear();
+        _wallpapers = MonitorWallpaper.Load(monitors);
         var cfg = AppConfig.Current;
 
         for (int i = 0; i < monitors.Count; i++)
@@ -357,13 +353,22 @@ public partial class QuickGridPage : Page
         var frame = new Border
         {
             CornerRadius = new CornerRadius(6),
-            Background = LoadWallpaperBrush() ?? (Brush)new SolidColorBrush(Color.FromRgb(0x20, 0x30, 0x50)),
+            Background = _wallpapers.TryGetValue(m.Id, out var wallpaper) && wallpaper is not null
+                ? new ImageBrush(wallpaper) { Stretch = Stretch.UniformToFill }
+                : new SolidColorBrush(Color.FromRgb(0x20, 0x30, 0x50)),
             ClipToBounds = true,
             MaxHeight = 260,
             HorizontalAlignment = HorizontalAlignment.Center,
         };
         var canvas = new Canvas { IsHitTestVisible = false };
-        frame.Child = canvas;
+        var previewLayers = new Grid();
+        previewLayers.Children.Add(new Border
+        {
+            Background = new SolidColorBrush(Color.FromArgb(64, 0, 0, 0)),
+            IsHitTestVisible = false,
+        });
+        previewLayers.Children.Add(canvas);
+        frame.Child = previewLayers;
         host.Children.Add(frame);
 
         void Relayout()
@@ -415,32 +420,6 @@ public partial class QuickGridPage : Page
             System.Windows.Threading.DispatcherPriority.Loaded);
     }
 
-    private static ImageBrush? LoadWallpaperBrush()
-    {
-        if (_wallpaperBrush is not null) return _wallpaperBrush;
-        try
-        {
-            var buf = new StringBuilder(520);
-            if (SystemParametersInfo(SPI_GETDESKWALLPAPER, (uint)buf.Capacity, buf, 0) && buf.Length > 0)
-            {
-                string path = buf.ToString();
-                if (File.Exists(path))
-                {
-                    var bmp = new BitmapImage();
-                    bmp.BeginInit();
-                    bmp.CacheOption = BitmapCacheOption.OnLoad;
-                    bmp.UriSource = new Uri(path);
-                    bmp.EndInit();
-                    bmp.Freeze();
-                    var br = new ImageBrush(bmp) { Stretch = Stretch.UniformToFill };
-                    _wallpaperBrush = br;
-                    return br;
-                }
-            }
-        }
-        catch { }
-        return null;
-    }
 
     private static FrameworkElement MakeNumberRow(string label, int initial, int min, int max, Action<int> onChange)
     {

@@ -7,4 +7,5 @@ public sealed class DesktopMemberReference
     public string? Identity { get; set; }
     public DateTime? MissingSinceUtc { get; set; }
     public bool PendingAssignment { get; set; }
+    public bool KeepInCategory { get; set; }
 }

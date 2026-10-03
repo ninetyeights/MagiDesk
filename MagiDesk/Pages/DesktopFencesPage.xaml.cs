@@ -15,7 +15,6 @@ public partial class DesktopFencesPage : Page
     private bool _loading;
     private bool _recordingPeekHotkey;
     private string _displayedHex = "";
-    private sealed record BoxChoice(string Id, string Name);
 
     private sealed record ColorChoice(string? Hex, string Label);
     private static readonly ColorChoice[] BoxColors =
@@ -63,10 +62,8 @@ public partial class DesktopFencesPage : Page
         TsUnifiedSurface.IsChecked = AppConfig.Current.DesktopUnifiedSurface;
         TsEnabled.IsChecked = AppConfig.Current.DesktopFencesEnabled;
         var selectedId = AppearanceBox.SelectedValue as string;
-        var choices = AppConfig.Current.DesktopBoxes.Select(b => new BoxChoice(b.Id,
-            DesktopTabGroups.Members(AppConfig.Current.DesktopBoxes, b).Length > 1 ? $"分页 · {b.Name}" : b.Name))
-            .ToArray();
-        if (AppearanceBox.ItemsSource is not BoxChoice[] oldChoices || !oldChoices.SequenceEqual(choices))
+        var choices = BoxAppearanceScope.Choices(AppConfig.Current.DesktopBoxes, AppConfig.Current.DesktopUnifiedSurface);
+        if (AppearanceBox.ItemsSource is not BoxAppearanceScope.Choice[] oldChoices || !oldChoices.SequenceEqual(choices))
         {
             AppearanceBox.ItemsSource = choices;
             AppearanceBox.SelectedValue = choices.Any(b => b.Id == selectedId) ? selectedId : choices.FirstOrDefault()?.Id;
@@ -83,8 +80,8 @@ public partial class DesktopFencesPage : Page
         AppConfig.Current.Save();
     }
 
-    private DesktopBox[] AppearanceTargets => AppConfig.Current.DesktopBoxes
-        .Where(b => b.Id == (AppearanceBox.SelectedValue as string)).ToArray();
+    private DesktopBox[] AppearanceTargets => BoxAppearanceScope.Targets(AppConfig.Current.DesktopBoxes,
+        AppConfig.Current.DesktopUnifiedSurface, AppearanceBox.SelectedValue as string);
     private DesktopBox? SelectedAppearanceBox => AppearanceTargets.FirstOrDefault();
 
     private void ChangeAppearance(Func<DesktopBox, bool> needsChange, Action<DesktopBox> change)
@@ -104,7 +101,10 @@ public partial class DesktopFencesPage : Page
     private void RefreshAppearanceOptions()
     {
         var box = SelectedAppearanceBox;
-        AppearanceScopeHint.Text = "";
+        var targets = AppearanceTargets;
+        AppearanceScopeHint.Text = targets.Length > 1
+            ? $"修改将应用到这个盒子的全部 {targets.Length} 个分页。当前显示“{box!.Name}”的值；每次仅统一你修改的选项。"
+            : box is null ? "" : "修改仅应用到当前选择的盒子或分页。";
         AppearanceEmpty.Visibility = box is null ? Visibility.Visible : Visibility.Collapsed;
         AppearanceOptions.IsEnabled = box is not null;
         if (box is null)
@@ -118,6 +118,10 @@ public partial class DesktopFencesPage : Page
         AppearanceBlur.IsChecked = box.BackgroundBlur > 0;
         AppearanceBorder.IsChecked = box.ShowBorder;
         AppearanceRoundedCorners.IsChecked = box.RoundedCorners;
+        BackgroundImageName.Text = string.IsNullOrWhiteSpace(box.BackgroundImagePath)
+            ? "未设置图片" : System.IO.Path.GetFileName(box.BackgroundImagePath);
+        BackgroundImageName.ToolTip = box.BackgroundImagePath;
+        BackgroundImageMode.SelectedIndex = box.BackgroundImageFit ? 1 : 0;
         AppearanceHex.Text = "#" + (box.BgColorHex ?? "303034").TrimStart('#');
         _displayedHex = AppearanceHex.Text;
         UpdateColorPreview();
@@ -245,6 +249,44 @@ public partial class DesktopFencesPage : Page
         ChangeAppearance(b => !string.Equals(b.BgColorHex, choice.Hex, StringComparison.OrdinalIgnoreCase), b => b.BgColorHex = choice.Hex);
     }
 
+    private async void ChooseBackgroundImage_Click(object sender, RoutedEventArgs e)
+    {
+        if (SelectedAppearanceBox is null) return;
+        var dialog = new Microsoft.Win32.OpenFileDialog
+        {
+            Title = "选择盒子背景图片",
+            Filter = "图片|*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.tif;*.tiff|所有文件|*.*",
+            CheckFileExists = true,
+        };
+        if (dialog.ShowDialog(Window.GetWindow(this)) != true) return;
+        var selection = AppearanceBox.SelectedValue;
+        BackgroundImageError.Visibility = Visibility.Collapsed;
+        try
+        {
+            await Task.Run(() => MagiDesk.Features.BrowserBadges.AvatarImageLoader.Load(dialog.FileName, 1024, 1));
+            if (!Equals(selection, AppearanceBox.SelectedValue)) return;
+            ChangeAppearance(b => b.BackgroundImagePath != dialog.FileName, b => b.BackgroundImagePath = dialog.FileName);
+        }
+        catch
+        {
+            BackgroundImageError.Text = "无法读取这张图片，请选择有效的本地图片文件。";
+            BackgroundImageError.Visibility = Visibility.Visible;
+        }
+    }
+
+    private void RemoveBackgroundImage_Click(object sender, RoutedEventArgs e)
+    {
+        BackgroundImageError.Visibility = Visibility.Collapsed;
+        ChangeAppearance(b => b.BackgroundImagePath is not null, b => b.BackgroundImagePath = null);
+    }
+
+    private void BackgroundImageMode_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (_loading || BackgroundImageMode is null) return;
+        bool fit = BackgroundImageMode.SelectedIndex == 1;
+        ChangeAppearance(b => b.BackgroundImageFit != fit, b => b.BackgroundImageFit = fit);
+    }
+
     private void RefreshPeekHotkey()
     {
         if (_recordingPeekHotkey) return;
@@ -282,7 +324,7 @@ public partial class DesktopFencesPage : Page
         RefreshPeekHotkey();
     }
 
-    private void ResetPeekHotkey_Click(object sender, RoutedEventArgs e) => SavePeekHotkey(2 | 4, 0x46);
+    private void ResetPeekHotkey_Click(object sender, RoutedEventArgs e) => SavePeekHotkey(2 | 4, 0x44);
     private void ClearPeekHotkey_Click(object sender, RoutedEventArgs e) => SavePeekHotkey(0, 0);
 
     private void RecordPeekKey(object sender, KeyEventArgs e)

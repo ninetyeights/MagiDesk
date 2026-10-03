@@ -13,11 +13,13 @@ namespace MagiDesk.Features.ProfileDock;
 /// Owns the floating <see cref="ProfileDockWindow"/>, keeps its buttons in
 /// sync with Chrome's profile catalog, and handles click → launch/focus/cycle.
 /// </summary>
-public sealed class ProfileDockService : IDisposable
+public sealed partial class ProfileDockService : IDisposable
 {
     private readonly Dispatcher _ui;
     private readonly MagiDesk.Infrastructure.CoalescedAction _configRefresh;
     private string _settingsSnapshot = "";
+    private string _catalogSettingsSnapshot = "";
+    private readonly DispatcherTimer _settingsDebounce;
     private bool _disposed;
     private readonly HashSet<string> _clicksInProgress = new();
     // One dock window per target monitor (a single entry in single-monitor mode).
@@ -39,6 +41,11 @@ public sealed class ProfileDockService : IDisposable
     {
         _ui = ui;
         _configRefresh = new(action => _ui.BeginInvoke(action, DispatcherPriority.Background), ApplyConfig);
+        _settingsDebounce = new DispatcherTimer(DispatcherPriority.Background, ui) { Interval = TimeSpan.FromMilliseconds(40) };
+        _settingsDebounce.Tick += (_, _) => { _settingsDebounce.Stop(); _configRefresh.Request(); };
+        _applicationTimer = new DispatcherTimer(TimeSpan.FromSeconds(1), DispatcherPriority.Background,
+            (_, _) => RefreshApplicationWindows(), ui);
+        _applicationTimer.Stop();
     }
 
     public void Start()
@@ -57,7 +64,9 @@ public sealed class ProfileDockService : IDisposable
     public void Dispose()
     {
         _disposed = true;
+        _applicationTimer.Stop();
         AppConfig.Changed -= OnConfigChanged;
+        _settingsDebounce.Stop();
         if (App.BrowserBadges is not null)
             App.BrowserBadges.WindowsChanged -= OnWindowsChanged;
         HideDock();
@@ -68,8 +77,15 @@ public sealed class ProfileDockService : IDisposable
     private void OnWindowsChanged()
     {
         if (_windows.Count == 0) return;
-        var cache = App.BrowserBadges?.CachedProfileWindows().ToList()
-                    ?? new List<(IntPtr, string)>();
+        _browserWindowSnapshot = (App.BrowserBadges?.CachedProfileWindows() ?? Enumerable.Empty<(IntPtr, string)>())
+            .GroupBy(w => w.Item1).ToDictionary(g => g.Key, g => g.First().Item2);
+        if (UpdateRunningItems())
+        {
+            var cfg = AppConfig.Current;
+            var groups = BuildItems();
+            foreach (var window in _windows) window.SetItems(groups, cfg.BrowserDockButtonSize, cfg.BrowserDockSeparator);
+        }
+        var cache = _browserWindowSnapshot.Select(w => (w.Key, w.Value)).ToList();
         var fgHwnd = NativeMethods.GetForegroundWindow();
         var fgKey  = cache.FirstOrDefault(t => t.Item1 == fgHwnd).Item2;
 
@@ -82,6 +98,21 @@ public sealed class ProfileDockService : IDisposable
                             && string.Equals(fgKey, p.Key, StringComparison.OrdinalIgnoreCase);
                 return (hasWin, isFg);
             });
+        foreach (var app in AppConfig.Current.DockApplications)
+        {
+            var matches = DockApplicationRuntime.Match(app, _applicationWindows);
+            if (!_lastApplicationMatchCounts.TryGetValue(app.Id, out int previousCount) || previousCount != matches.Count)
+            {
+                _lastApplicationMatchCounts[app.Id] = matches.Count;
+                DiagnosticLog.Write($"{DateTime.Now:HH:mm:ss.fff} DOCK-APPS match id={app.Id} exe={System.IO.Path.GetFileName(app.ExecutablePath)} windows={matches.Count}\n");
+            }
+            states[DockItem.ApplicationKey(app.Id)] = (matches.Count > 0, matches.Any(w => w.Handle == fgHwnd));
+        }
+        foreach (var item in _runningItems.Where(i => i.Application is not null))
+        {
+            var matches = ApplicationMatches(item.Application!, true, _applicationWindows);
+            states[item.Key] = (matches.Count > 0, matches.Any(w => w.Handle == fgHwnd));
+        }
         foreach (var w in _windows) w.UpdateStates(states);
     }
 
@@ -93,11 +124,13 @@ public sealed class ProfileDockService : IDisposable
 
     private void OnConfigChanged()
     {
+        if (!_ui.CheckAccess()) { _ui.BeginInvoke(new Action(OnConfigChanged)); return; }
         if (_disposed) return;
         string snapshot = BadgeSettingsSnapshot.CaptureDock(AppConfig.Current);
         if (snapshot == _settingsSnapshot) return;
         _settingsSnapshot = snapshot;
-        _configRefresh.Request();
+        _settingsDebounce.Stop();
+        _settingsDebounce.Start();
     }
 
     private void ApplyConfig()
@@ -117,13 +150,38 @@ public sealed class ProfileDockService : IDisposable
     {
         using var trace = StartupTrace.Measure("dock.catalog");
         _profiles = ChromeProfileCatalog.LoadAll();
+        _catalogSettingsSnapshot = System.Text.Json.JsonSerializer.Serialize(AppConfig.Current.BrowserProfiles);
     }
 
-    private void ShowDock()
+    private int _dockShowVersion;
+
+    private async void ShowDock()
     {
-        RefreshCatalog();
+        int version = ++_dockShowVersion;
+        if (_catalogSettingsSnapshot != System.Text.Json.JsonSerializer.Serialize(AppConfig.Current.BrowserProfiles)) RefreshCatalog();
         var cfg = AppConfig.Current;
+        UpdateRunningItems();
         _signature = Signature(cfg);
+
+        // Populate the running section before creating the first visible layout.
+        // A newer configuration/show request invalidates this asynchronous snapshot.
+        if (cfg.DockShowRunningApplications || DockGroups.Build(cfg, _profiles).SelectMany(g => g.Items).Any(i => i.Application is not null))
+        {
+            try
+            {
+                var initial = await ScanApplicationsAsync();
+                if (_disposed || version != _dockShowVersion || !cfg.BrowserDockEnabled) return;
+                if (App.BrowserBadges is { } browsers)
+                    await browsers.RefreshDockWindowProfilesAsync(initial.Select(w => (w.Handle, w.ProcessId, w.ExecutablePath)));
+                if (_disposed || version != _dockShowVersion || !cfg.BrowserDockEnabled) return;
+                _applicationWindows = initial;
+                _browserWindowSnapshot = (App.BrowserBadges?.CachedProfileWindows() ?? Enumerable.Empty<(IntPtr, string)>())
+                    .GroupBy(w => w.Item1).ToDictionary(g => g.Key, g => g.First().Item2);
+                UpdateRunningItems();
+            }
+            catch (Exception ex) { DiagnosticLog.Write($"DOCK-LAYOUT initial scan failed: {ex.GetType().Name}"); }
+        }
+        if (_disposed || version != _dockShowVersion || !cfg.BrowserDockEnabled) return;
 
         var monitors = StartupTrace.Run("dock.monitors", () => TargetMonitors(cfg));
         // Legacy free-drag behavior only when a single dock targets the primary
@@ -132,24 +190,24 @@ public sealed class ProfileDockService : IDisposable
         bool legacy = cfg.BrowserDockMonitorMode == DockMonitorMode.Single
                       && string.IsNullOrEmpty(cfg.BrowserDockMonitorId);
 
-        var groups = StartupTrace.Run("dock.groups", BuildGroupedProfiles);
+        var groups = BuildItems();
         foreach (var m in monitors)
         {
-            var w = StartupTrace.Run("dock.window-create", () => new ProfileDockWindow
+            var w = StartupTrace.Run("dock.window-create", () => new ProfileDockWindow(cfg.BrowserDockMode)
             {
-                Mode               = cfg.BrowserDockMode,
                 MonitorId          = m.Id,
                 MonitorWorkAreaPx  = m.WorkArea,
                 PerMonitorPosition = !legacy,
             });
             w.SavedPositionPx = DockPositionMemory.Read(cfg, !legacy, m.Id, m.DpiPercent / 100.0);
-            w.ProfileClicked += OnProfileClicked;
-            using (StartupTrace.Measure("dock.profiles")) w.SetProfiles(groups, cfg.BrowserDockButtonSize, cfg.BrowserDockSeparator);
+            w.ItemClicked += OnItemClicked;
+            using (StartupTrace.Measure("dock.profiles")) w.SetItems(groups, cfg.BrowserDockButtonSize, cfg.BrowserDockSeparator);
+            using (StartupTrace.Measure("dock.prepare-show")) w.PrepareForFirstShow();
             using (StartupTrace.Measure("dock.show")) w.Show();
-            using (StartupTrace.Measure("dock.restore-position")) w.RestoreFloatingPosition();
             _windows.Add(w);
         }
         using (StartupTrace.Measure("dock.initial-state")) OnWindowsChanged();
+        UpdateApplicationTracking();
     }
 
     /// <summary>The monitors the dock should appear on: every monitor in
@@ -162,6 +220,9 @@ public sealed class ProfileDockService : IDisposable
         if (cfg.BrowserDockMonitorMode == DockMonitorMode.All) return all;
 
         MonitorSlot? chosen = null;
+        if (cfg.BrowserDockMode == DockMode.Floating && cfg.DockFloatingEdge is 1 or 2
+            && string.IsNullOrEmpty(cfg.BrowserDockMonitorId) && cfg.DockFloatingAnchorMonitorId is { } anchorMonitor)
+            chosen = all.FirstOrDefault(m => m.Id == anchorMonitor);
         if (!string.IsNullOrEmpty(cfg.BrowserDockMonitorId))
             chosen = all.FirstOrDefault(
                 m => string.Equals(m.Id, cfg.BrowserDockMonitorId, StringComparison.OrdinalIgnoreCase));
@@ -177,69 +238,17 @@ public sealed class ProfileDockService : IDisposable
         return new List<MonitorSlot> { chosen };
     }
 
-    /// <summary>Partition the profile catalog into user-defined groups plus
-    /// an "ungrouped" list at the end. Preserves group order and profile
-    /// order within each group as configured. Respects
-    /// <see cref="AppConfig.BrowserDockHideUngrouped"/> to drop profiles
-    /// that aren't in any named group.</summary>
-    private IReadOnlyList<(string? Name, IReadOnlyList<ChromeProfile> Profiles)> BuildGroupedProfiles()
-    {
-        var cfg = AppConfig.Current;
-        var result = new List<(string?, IReadOnlyList<ChromeProfile>)>();
-        var allocated = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var grp in cfg.BrowserDockGroups)
-        {
-            var items = new List<ChromeProfile>();
-            foreach (var key in grp.ProfileDirs)
-            {
-                var p = _profiles.FirstOrDefault(
-                    x => x.Key.Equals(key, StringComparison.OrdinalIgnoreCase));
-                if (p is null) continue;
-                if (!IsProfileVisible(cfg, p.Key)) { allocated.Add(p.Key); continue; }
-                items.Add(p);
-                allocated.Add(p.Key);
-            }
-            if (items.Count > 0) result.Add((grp.Name, items));
-        }
-        if (!cfg.BrowserDockHideUngrouped)
-        {
-            var ordered = new List<ChromeProfile>();
-            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            // First: profiles in the explicit ungrouped order list.
-            foreach (var key in cfg.BrowserDockUngroupedOrder)
-            {
-                if (allocated.Contains(key) || seen.Contains(key)) continue;
-                var p = _profiles.FirstOrDefault(x => x.Key.Equals(key, StringComparison.OrdinalIgnoreCase));
-                if (p is null || !IsProfileVisible(cfg, p.Key)) continue;
-                ordered.Add(p);
-                seen.Add(p.Key);
-            }
-            // Then: any remaining ungrouped profiles in catalog order.
-            foreach (var p in _profiles)
-            {
-                if (allocated.Contains(p.Key) || seen.Contains(p.Key)) continue;
-                if (!IsProfileVisible(cfg, p.Key)) continue;
-                ordered.Add(p);
-            }
-            if (ordered.Count > 0) result.Add((null, ordered));
-        }
-        return result;
-    }
-
-    /// <summary>The BrowserBadges page Visible toggle controls badge rendering;
-    /// the dock honors the same flag so toggling a profile off there also
-    /// removes its dock button. Profiles with no per-profile entry default to
-    /// visible (matches <see cref="BrowserProfileSettings"/> default).</summary>
-    private static bool IsProfileVisible(AppConfig cfg, string profileKey)
-        => !cfg.BrowserProfiles.TryGetValue(profileKey, out var s) || s.Visible;
-
     private void HideDock()
     {
+        ++_dockShowVersion;
+        _applicationTimer.Stop();
+        _applicationWindows.Clear();
+        _runningItems.Clear();
         if (_windowPicker is not null) _windowPicker.IsOpen = false;
         _windowPicker = null;
         foreach (var w in _windows)
         {
-            try { w.ProfileClicked -= OnProfileClicked; w.Close(); } catch { }
+            try { w.ItemClicked -= OnItemClicked; w.Close(); } catch { }
         }
         _windows.Clear();
     }
@@ -247,17 +256,19 @@ public sealed class ProfileDockService : IDisposable
     private void RefreshDock()
     {
         if (_windows.Count == 0) return;
-        RefreshCatalog();
+        if (_catalogSettingsSnapshot != System.Text.Json.JsonSerializer.Serialize(AppConfig.Current.BrowserProfiles)) RefreshCatalog();
         var cfg = AppConfig.Current;
-        var groups = StartupTrace.Run("dock.groups", BuildGroupedProfiles);
+        UpdateRunningItems();
+        var groups = BuildItems();
         foreach (var w in _windows)
-            using (StartupTrace.Measure("dock.profiles")) w.SetProfiles(groups, cfg.BrowserDockButtonSize, cfg.BrowserDockSeparator);
+            using (StartupTrace.Measure("dock.profiles")) w.SetItems(groups, cfg.BrowserDockButtonSize, cfg.BrowserDockSeparator);
         OnWindowsChanged();
+        UpdateApplicationTracking();
     }
 
     // ========================================================== click handler
 
-    private async void OnProfileClicked(ChromeProfile p, System.Windows.Controls.Button anchor)
+    private async void OnProfileClicked(ChromeProfile p, System.Windows.Controls.Button anchor, bool runningOnly = false)
     {
         if (_disposed || !_clicksInProgress.Add(p.Key)) return;
         try
@@ -272,6 +283,7 @@ public sealed class ProfileDockService : IDisposable
 
             if (hwnds.Count == 0)
             {
+                if (runningOnly) return;
                 // Debounce: if we already kicked off a launch for this profile
                 // recently, ignore the click rather than spawning another browser
                 // instance (which would produce a duplicate window once the first
@@ -339,6 +351,9 @@ public sealed class ProfileDockService : IDisposable
             MaxHeight = 480,
             MaxWidth = 600,
         };
+        var floatingDock = System.Windows.Window.GetWindow(anchor) as ProfileDockWindow;
+        menu.Opened += (_, _) => floatingDock?.HoldFloating(true);
+        menu.Closed += (_, _) => floatingDock?.HoldFloating(false);
         foreach (var hwnd in windows)
         {
             var title = new System.Text.StringBuilder(512);
@@ -348,7 +363,7 @@ public sealed class ProfileDockService : IDisposable
             {
                 Header = new System.Windows.Controls.TextBlock
                 {
-                    Text = title.Length > 0 ? title.ToString() : $"浏览器窗口 {menu.Items.Count + 1}",
+                    Text = title.Length > 0 ? title.ToString() : $"应用窗口 {menu.Items.Count + 1}",
                     TextTrimming = TextTrimming.CharacterEllipsis,
                     MaxWidth = 540,
                 },

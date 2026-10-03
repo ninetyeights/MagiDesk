@@ -25,6 +25,7 @@ namespace MagiDesk.Pages
         {
             _loading = true;
             var cfg = AppConfig.Current;
+            TxtSaveStatus.Text = AppConfig.LastSaveError is null ? "配置自动保存，并保留上次版本和每日备份。" : "有设置尚未保存：" + AppConfig.LastSaveError;
 
             // Auto-start: registry is the source of truth — if the user removed
             // it via Task Manager, reflect that here and rewrite the config.
@@ -39,6 +40,12 @@ namespace MagiDesk.Pages
             TsTray.IsChecked = cfg.TrayIconEnabled;
             RefreshTraySub();
             _loading = false;
+        }
+
+        private void RetrySave_Click(object sender, RoutedEventArgs e)
+        {
+            bool saved = AppConfig.Current.TrySave();
+            TxtSaveStatus.Text = saved ? "配置已保存。" : "保存失败：" + AppConfig.LastSaveError;
         }
 
         private void AutoStart_Changed(object sender, RoutedEventArgs e)

@@ -7,11 +7,28 @@
         SizeToContent="Height"
         WindowStartupLocation="CenterOwner"
         ResizeMode="NoResize"
-        ShowInTaskbar="False">
+        ShowInTaskbar="False"
+        UseLayoutRounding="True"
+        SnapsToDevicePixels="True">
+    <Window.Resources>
+        <!-- Fluent defaults use padding intended for taller controls. Let the
+             content determine height instead of clipping it inside 32 DIPs. -->
+        <Style TargetType="{x:Type ComboBox}" BasedOn="{StaticResource {x:Type ComboBox}}">
+            <Setter Property="MinHeight" Value="34"/>
+            <Setter Property="Padding" Value="10,4,30,4"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+        </Style>
+        <Style TargetType="{x:Type TextBox}" BasedOn="{StaticResource {x:Type TextBox}}">
+            <Setter Property="MinHeight" Value="34"/>
+            <Setter Property="Padding" Value="10,4"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+        </Style>
+    </Window.Resources>
     <Grid Margin="20,16,20,16">
         <StackPanel>
-            <TextBlock Text="编辑文字头像" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,4"/>
+            <TextBlock x:Name="EditorHeading" Text="编辑文字头像" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,4"/>
             <TextBlock x:Name="TxtSubtitle"
+                       TextWrapping="Wrap"
                        FontSize="12"
                        Foreground="{DynamicResource TextFillColorSecondaryBrush}"
                        Margin="0,0,0,16"/>
@@ -27,16 +44,25 @@
                     Background="#0078D4">
                 <Grid>
                     <Canvas x:Name="PreviewOverlay" IsHitTestVisible="False"/>
+                    <Viewbox StretchDirection="DownOnly" Margin="4">
                     <TextBlock x:Name="PreviewText"
                                Foreground="White"
                                FontSize="34"
                                FontWeight="SemiBold"
                                HorizontalAlignment="Center"
                                VerticalAlignment="Center"/>
+                    </Viewbox>
                 </Grid>
             </Border>
 
             <!-- Shape -->
+            <StackPanel x:Name="ImageActions" Visibility="Collapsed" Margin="0,0,0,10">
+                <WrapPanel>
+                    <ui:Button Content="选择图片…" Click="ChooseImage_Click" Margin="0,0,8,0"/>
+                    <ui:Button Content="使用文字头像" Click="UseText_Click"/>
+                </WrapPanel>
+                <TextBlock x:Name="ImageHint" TextWrapping="Wrap" FontSize="12" Margin="0,6,0,0"/>
+            </StackPanel>
             <Grid Margin="0,0,0,10">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="90"/>
@@ -45,7 +71,6 @@
                 <TextBlock Grid.Column="0" Text="形状"
                            VerticalAlignment="Center"/>
                 <ComboBox Grid.Column="1" x:Name="CmbShape"
-                          Height="32"
                           VerticalContentAlignment="Center"
                           SelectionChanged="Shape_Changed">
                     <ComboBoxItem Content="圆形"/>
@@ -68,7 +93,6 @@
                            VerticalAlignment="Center"/>
                 <TextBox Grid.Column="1" x:Name="TxtInput"
                          MaxLength="3"
-                         Height="32"
                          VerticalContentAlignment="Center"
                          TextChanged="Input_Changed"/>
             </Grid>
@@ -82,7 +106,6 @@
                 <TextBlock Grid.Column="0" Text="样式"
                            VerticalAlignment="Center"/>
                 <ComboBox Grid.Column="1" x:Name="CmbStyle"
-                          Height="32"
                           VerticalContentAlignment="Center"
                           SelectionChanged="Style_Changed">
                     <ComboBoxItem Content="纯色"/>
@@ -90,6 +113,9 @@
                     <ComboBoxItem Content="渐变 · 径向"/>
                     <ComboBoxItem Content="渐变 · 水平"/>
                     <ComboBoxItem Content="渐变 · 垂直"/>
+                    <ComboBoxItem Content="双色 · 左右拼色"/>
+                    <ComboBoxItem Content="双色 · 对角拼色"/>
+                    <ComboBoxItem Content="渐变 · 柔光"/>
                 </ComboBox>
             </Grid>
 
@@ -102,7 +128,6 @@
                 <TextBlock Grid.Column="0" Text="装饰"
                            VerticalAlignment="Center"/>
                 <ComboBox Grid.Column="1" x:Name="CmbOverlay"
-                          Height="32"
                           VerticalContentAlignment="Center"
                           SelectionChanged="Style_Changed">
                     <ComboBoxItem Content="无"/>
@@ -120,15 +145,14 @@
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
-                <TextBlock Grid.Column="0" Text="底色"
+                <TextBlock x:Name="ThemeLabel" Grid.Column="0" Text="图标背景"
                            VerticalAlignment="Center"/>
                 <TextBox Grid.Column="1" x:Name="TxtBgHex"
-                         Height="32"
                          VerticalContentAlignment="Center"
                          MaxLength="7"
                          TextChanged="Input_Changed"/>
                 <Button Grid.Column="2" x:Name="BtnBgPick"
-                        Width="36" Height="32"
+                        Width="36" MinHeight="34" VerticalAlignment="Stretch" Padding="0"
                         Margin="6,0,0,0"
                         Click="BgPick_Click"/>
             </Grid>
@@ -143,17 +167,20 @@
                 <TextBlock Grid.Column="0" Text="渐变色"
                            VerticalAlignment="Center"/>
                 <TextBox Grid.Column="1" x:Name="TxtBgHex2"
-                         Height="32"
                          VerticalContentAlignment="Center"
                          MaxLength="7"
                          TextChanged="Input_Changed"/>
                 <Button Grid.Column="2" x:Name="BtnBg2Pick"
-                        Width="36" Height="32"
+                        Width="36" MinHeight="34" VerticalAlignment="Stretch" Padding="0"
                         Margin="6,0,0,0"
                         Click="Bg2Pick_Click"/>
             </Grid>
 
             <!-- Text color -->
+            <Expander Header="高级：文字颜色" Margin="0,0,0,12">
+            <StackPanel>
+            <CheckBox x:Name="AutoForeground" Content="自动选择黑色或白色" IsChecked="True"
+                      Checked="Input_Changed" Unchecked="Input_Changed" Margin="0,8,0,8"/>
             <Grid Margin="0,0,0,16">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="90"/>
@@ -163,15 +190,16 @@
                 <TextBlock Grid.Column="0" Text="文字颜色"
                            VerticalAlignment="Center"/>
                 <TextBox Grid.Column="1" x:Name="TxtFgHex"
-                         Height="32"
                          VerticalContentAlignment="Center"
                          MaxLength="7"
                          TextChanged="Input_Changed"/>
                 <Button Grid.Column="2" x:Name="BtnFgPick"
-                        Width="36" Height="32"
+                        Width="36" MinHeight="34" VerticalAlignment="Stretch" Padding="0"
                         Margin="6,0,0,0"
                         Click="FgPick_Click"/>
             </Grid>
+            </StackPanel>
+            </Expander>
 
             <!-- Actions -->
             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">

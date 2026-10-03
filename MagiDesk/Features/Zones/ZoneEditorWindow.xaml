@@ -18,6 +18,31 @@
                 <ui:ThemesDictionary Theme="Dark"/>
                 <ui:ControlsDictionary/>
             </ResourceDictionary.MergedDictionaries>
+            <Style x:Key="GridStepButton" TargetType="RepeatButton">
+                <Setter Property="Width" Value="30"/>
+                <Setter Property="Height" Value="18"/>
+                <Setter Property="Focusable" Value="False"/>
+                <Setter Property="Delay" Value="400"/>
+                <Setter Property="Interval" Value="100"/>
+                <Setter Property="Foreground" Value="#EEEEEE"/>
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="RepeatButton">
+                            <Border x:Name="Surface" Background="Transparent" CornerRadius="3">
+                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Border>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter TargetName="Surface" Property="Background" Value="#FF444444"/>
+                                </Trigger>
+                                <Trigger Property="IsPressed" Value="True">
+                                    <Setter TargetName="Surface" Property="Background" Value="#FF555555"/>
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
         </ResourceDictionary>
     </Window.Resources>
     <Grid x:Name="Root" Focusable="True">
@@ -49,7 +74,7 @@
                 <ui:Button x:Name="BtnSplitScope" Content="切割: 局部" Padding="14,6"
                            Margin="0,0,16,0" Click="BtnSplitScope_Click"
                            Appearance="Secondary"/>
-                <ui:Button x:Name="BtnResetGrid" Content="重置为 2×2" Padding="14,6"
+                <ui:Button x:Name="BtnResetGrid" Content="重置网格…" Padding="14,6"
                            Margin="0,0,8,0"  Click="BtnResetGrid_Click"
                            Appearance="Secondary"/>
                 <ui:Button x:Name="BtnSave"   Content="保存 (Enter)" Padding="14,6"
@@ -61,11 +86,50 @@
             </StackPanel>
         </Border>
 
+        <Popup x:Name="ResetGridPopup" PlacementTarget="{Binding ElementName=BtnResetGrid}"
+               Placement="Bottom" StaysOpen="False" AllowsTransparency="True">
+            <Border Background="#FF222222" CornerRadius="8" Padding="16" Margin="0,6,0,0">
+                <StackPanel Keyboard.KeyDown="ResetGridPanel_KeyDown">
+                    <TextBlock Text="重置网格" Foreground="White" FontWeight="SemiBold" Margin="0,0,0,12"/>
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="行" Foreground="White" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                        <StackPanel Orientation="Horizontal" Tag="Rows" PreviewMouseWheel="ResetNumber_MouseWheel">
+                            <TextBox x:Name="ResetRows" Text="2" Width="52" Padding="8,5" MaxLength="2" VerticalContentAlignment="Center" TextChanged="ResetGridNumber_TextChanged"/>
+                            <StackPanel Margin="3,0,0,0">
+                                <RepeatButton Style="{StaticResource GridStepButton}" Tag="Rows+" Click="ResetNumberStep_Click" ToolTip="增加行数">
+                                    <Path Data="M 0,4 L 5,0 L 10,4" Stroke="#EEEEEE" StrokeThickness="1.5"/>
+                                </RepeatButton>
+                                <RepeatButton Style="{StaticResource GridStepButton}" Tag="Rows-" Click="ResetNumberStep_Click" ToolTip="减少行数">
+                                    <Path Data="M 0,0 L 5,4 L 10,0" Stroke="#EEEEEE" StrokeThickness="1.5"/>
+                                </RepeatButton>
+                            </StackPanel>
+                        </StackPanel>
+                        <TextBlock Text="列" Foreground="White" VerticalAlignment="Center" Margin="16,0,8,0"/>
+                        <StackPanel Orientation="Horizontal" Tag="Columns" PreviewMouseWheel="ResetNumber_MouseWheel">
+                            <TextBox x:Name="ResetColumns" Text="2" Width="52" Padding="8,5" MaxLength="2" VerticalContentAlignment="Center" TextChanged="ResetGridNumber_TextChanged"/>
+                            <StackPanel Margin="3,0,0,0">
+                                <RepeatButton Style="{StaticResource GridStepButton}" Tag="Columns+" Click="ResetNumberStep_Click" ToolTip="增加列数">
+                                    <Path Data="M 0,4 L 5,0 L 10,4" Stroke="#EEEEEE" StrokeThickness="1.5"/>
+                                </RepeatButton>
+                                <RepeatButton Style="{StaticResource GridStepButton}" Tag="Columns-" Click="ResetNumberStep_Click" ToolTip="减少列数">
+                                    <Path Data="M 0,0 L 5,4 L 10,0" Stroke="#EEEEEE" StrokeThickness="1.5"/>
+                                </RepeatButton>
+                            </StackPanel>
+                        </StackPanel>
+                    </StackPanel>
+                    <TextBlock x:Name="ResetScopeHint" Foreground="#CCCCCC" Margin="0,10,0,0"/>
+                    <TextBlock Text="数字改变即重置布局，范围为 1–12。" Foreground="#CCCCCC" Margin="0,6,0,10"/>
+                    <TextBlock x:Name="ResetGridError" Text="请输入 1–12 的整数。" Foreground="#FFFFB464"
+                               Visibility="Collapsed" Margin="0,0,0,10"/>
+                </StackPanel>
+            </Border>
+        </Popup>
+
         <TextBlock VerticalAlignment="Bottom" HorizontalAlignment="Center"
                    Margin="0,0,0,24" TextAlignment="Center" LineHeight="18"
                    Foreground="#CCFFFFFF" FontSize="12">
             悬停显示切割线（Shift 切换方向）· 点击切割 ·「切割: 局部/全局」或按住 Ctrl 临时切换贯穿整块<LineBreak/>
-            右键合并（必须同父节点相邻）· Delete 删除 · 平均分配均分选中 · 拖动分隔条整条网格线一起移动
+            右键空白合并选区 · 右键分割线设置联动 · Delete 删除 · 平均分配均分选中
         </TextBlock>
     </Grid>
 </Window>

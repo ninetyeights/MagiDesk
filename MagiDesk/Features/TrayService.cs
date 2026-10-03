@@ -26,6 +26,11 @@ public sealed class TrayService : IDisposable
             ContextMenuStrip = BuildMenu(),
         };
         _icon.DoubleClick += (_, _) => ShowMain();
+        _icon.BalloonTipClicked += (_, _) =>
+        {
+            ShowMain();
+            if (_main is MainWindow main) main.NavigateToPage(typeof(MagiDesk.Pages.AboutPage));
+        };
     }
 
     /// <summary>Load the app icon (Assets\app.ico) from the assembly resources for
@@ -75,6 +80,11 @@ public sealed class TrayService : IDisposable
         _main.Topmost = false;
     }
 
+    internal void NotifyUpdate(string version)
+    {
+        _icon?.ShowBalloonTip(5000, "MagiDesk 有新版本", $"发现 {version}，请在“关于 MagiDesk”中下载更新。", ToolTipIcon.Info);
+    }
+
     public void Dispose()
     {
         if (_icon is not null)
@@ -95,47 +105,51 @@ public sealed class TrayService : IDisposable
         showItem.Click += (_, _) => ShowMain();
         menu.Items.Add(showItem);
 
+
         menu.Items.Add(new ToolStripSeparator());
 
-        var dragItem = new ToolStripMenuItem("启用窗口拖动");
-        dragItem.CheckOnClick = true;
-        dragItem.Checked = AppConfig.Current.WindowDragEnabled;
-        dragItem.CheckedChanged += (_, _) =>
+        var switches = new List<(ToolStripMenuItem Item, Func<AppConfig, bool> Read)>();
+        void AddSwitch(string title, Func<AppConfig, bool> read, Action<AppConfig, bool> write, Action? apply = null)
         {
-            AppConfig.Current.WindowDragEnabled = dragItem.Checked;
-            AppConfig.Current.Save();
-        };
-        menu.Items.Add(dragItem);
+            var item = new ToolStripMenuItem(title) { Checked = read(AppConfig.Current), CheckOnClick = false };
+            item.Click += (_, _) =>
+            {
+                var cfg = AppConfig.Current;
+                write(cfg, !read(cfg));
+                cfg.Save();
+                apply?.Invoke();
+                item.Checked = read(cfg);
+            };
+            switches.Add((item, read));
+            menu.Items.Add(item);
+        }
+        AddSwitch("窗口拖动", c => c.WindowDragEnabled, (c, on) => c.WindowDragEnabled = on);
+        AddSwitch("窗口分区", c => c.ZonesEnabled, (c, on) => c.ZonesEnabled = on);
+        AddSwitch("快速网格", c => c.QuickGridEnabled, (c, on) => c.QuickGridEnabled = on,
+            () => App.QuickGrid?.Reregister());
+        AddSwitch("桌面盒子", c => c.DesktopFencesEnabled, (c, on) => c.DesktopFencesEnabled = on);
+        AddSwitch("Dock", c => c.BrowserDockEnabled, (c, on) => c.BrowserDockEnabled = on);
+        AddSwitch("浏览器微标", c => c.BrowserBadgeEnabled, (c, on) => c.BrowserBadgeEnabled = on);
 
-        var zonesItem = new ToolStripMenuItem("启用窗口分区");
-        zonesItem.CheckOnClick = true;
-        zonesItem.Checked = AppConfig.Current.ZonesEnabled;
-        zonesItem.CheckedChanged += (_, _) =>
-        {
-            AppConfig.Current.ZonesEnabled = zonesItem.Checked;
-            AppConfig.Current.Save();
-        };
-        menu.Items.Add(zonesItem);
-
-        var quickGridItem = new ToolStripMenuItem("启用快速网格");
-        quickGridItem.CheckOnClick = true;
-        quickGridItem.Checked = AppConfig.Current.QuickGridEnabled;
-        quickGridItem.CheckedChanged += (_, _) =>
-        {
-            AppConfig.Current.QuickGridEnabled = quickGridItem.Checked;
-            AppConfig.Current.Save();
-            App.QuickGrid?.Reregister();
-        };
-        menu.Items.Add(quickGridItem);
-
-        // Keep menu state in sync if user toggles from the settings pages.
+        // Opening is read-only: updating check marks must not save configuration
+        // or trigger feature refreshes through CheckedChanged.
         menu.Opening += (_, _) =>
         {
-            dragItem.Checked      = AppConfig.Current.WindowDragEnabled;
-            zonesItem.Checked     = AppConfig.Current.ZonesEnabled;
-            quickGridItem.Checked = AppConfig.Current.QuickGridEnabled;
+            foreach (var (item, read) in switches) item.Checked = read(AppConfig.Current);
         };
-
+        menu.Items.Add(new ToolStripSeparator());
+        void AddPage(string title, Type page)
+        {
+            var item = new ToolStripMenuItem(title);
+            item.Click += (_, _) =>
+            {
+                ShowMain();
+                if (_main is MainWindow main) main.NavigateToPage(page);
+            };
+            menu.Items.Add(item);
+        }
+        AddPage("设置", typeof(MagiDesk.Pages.SettingsPage));
+        AddPage("关于 MagiDesk", typeof(MagiDesk.Pages.AboutPage));
         menu.Items.Add(new ToolStripSeparator());
 
         var exitItem = new ToolStripMenuItem("退出 MagiDesk");

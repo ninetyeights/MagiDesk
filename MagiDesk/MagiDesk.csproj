@@ -1,6 +1,11 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
+    <Version>0.1.0-beta.1</Version>
+    <AssemblyVersion>0.1.0.0</AssemblyVersion>
+    <FileVersion>0.1.0.0</FileVersion>
+    <InformationalVersion>$(Version)</InformationalVersion>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
     <OutputType>WinExe</OutputType>
     <TargetFramework>net10.0-windows</TargetFramework>
     <Nullable>enable</Nullable>
@@ -24,6 +29,7 @@
   <ItemGroup>
     <!-- App icon (exe + window + tray). See Assets\logo.svg for the source. -->
     <Resource Include="Assets\app.ico" />
+    <EmbeddedResource Include="Features\Updates\UpdateKeys.json" LogicalName="MagiDesk.UpdateKeys.json" />
   </ItemGroup>
 
   <ItemGroup>
@@ -37,9 +43,9 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="WPF-UI" Version="4.2.0" />
+    <PackageReference Include="WPF-UI" Version="4.3.0" />
     <!-- WMI for reading chrome.exe command lines. -->
-    <PackageReference Include="System.Management" Version="9.0.0" />
+    <PackageReference Include="System.Management" Version="9.0.20" />
   </ItemGroup>
 
 

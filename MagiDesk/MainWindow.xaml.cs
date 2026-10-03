@@ -26,6 +26,12 @@ namespace MagiDesk
             Closing += (_, _) => SaveGeometry();
         }
 
+        internal void NavigateToPage(Type page)
+        {
+            if (IsLoaded) RootNavigation.Navigate(page);
+            else _initialPage = page;
+        }
+
         private void RestoreGeometry()
         {
             var cfg = AppConfig.Current;

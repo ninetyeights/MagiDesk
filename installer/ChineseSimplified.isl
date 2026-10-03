@@ -1,0 +1,52 @@
+; MagiDesk installer translations. Unspecified diagnostic messages use Default.isl.
+[LangOptions]
+LanguageName=简体中文
+LanguageID=$0804
+DialogFontName=Microsoft YaHei UI
+DialogFontSize=9
+
+[Messages]
+SetupAppTitle=安装程序
+SetupWindowTitle=安装 %1
+UninstallAppTitle=卸载程序
+UninstallAppFullTitle=卸载 %1
+InformationTitle=提示
+ConfirmTitle=确认
+ErrorTitle=错误
+ButtonBack=< 上一步(&B)
+ButtonNext=下一步(&N) >
+ButtonInstall=安装(&I)
+ButtonOK=确定
+ButtonCancel=取消
+ButtonYes=是(&Y)
+ButtonNo=否(&N)
+ButtonFinish=完成(&F)
+ButtonBrowse=浏览(&B)…
+ButtonNewFolder=新建文件夹(&M)
+WelcomeLabel1=欢迎使用 [name] 安装程序
+WelcomeLabel2=将安装 [name/ver]。%n%n请先从系统托盘退出正在运行的 MagiDesk。升级和卸载会保留用户配置及桌面文件。
+WizardSelectDir=选择安装位置
+SelectDirDesc=将 [name] 安装到哪个文件夹？
+SelectDirLabel3=将安装到下列文件夹。点击“下一步”继续，或点击“浏览”选择其他位置。
+WizardSelectTasks=选择附加任务
+SelectTasksDesc=需要执行哪些附加任务？
+SelectTasksLabel2=请选择附加任务，然后点击“下一步”。
+WizardReady=准备安装
+ReadyLabel1=准备将 [name] 安装到您的电脑。
+ReadyLabel2a=点击“安装”继续；点击“上一步”检查设置。
+ReadyMemoDir=安装位置：
+ReadyMemoTasks=附加任务：
+WizardInstalling=正在安装
+InstallingLabel=正在安装 [name]，请稍候。
+StatusExtractFiles=正在解压文件…
+StatusCreateIcons=正在创建快捷方式…
+StatusWriteRegistry=正在写入安装信息…
+WizardFinished=安装完成
+FinishedHeadingLabel=[name] 安装完成
+FinishedLabelNoIcons=已完成安装。您可以从开始菜单启动 MagiDesk。
+FinishedLabel=已完成安装。您可以从创建的快捷方式启动 MagiDesk。
+SetupAppRunningError=检测到 %1 正在运行。%n%n请从 MagiDesk 系统托盘菜单选择“退出”，然后点击“确定”继续；点击“取消”退出安装。
+UninstallAppRunningError=检测到 %1 正在运行。%n%n请先从系统托盘退出 MagiDesk，然后点击“确定”继续卸载。
+ConfirmUninstall=确定卸载 %1 吗？%n%n用户配置和桌面文件将保留。
+UninstallStatusLabel=正在卸载 %1，请稍候。
+UninstalledAll=%1 已卸载。用户配置和桌面文件已保留。

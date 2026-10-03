@@ -1,0 +1,13 @@
+title = "MagiDesk secret scanning"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "generic-api-key"
+[[rules.allowlists]]
+description = "Keyboard labels in WindowDragPage XAML, not API keys"
+condition = "AND"
+paths = ['''(^|[/\\])MagiDesk[/\\]Pages[/\\]WindowDragPage\.xaml$''']
+regexTarget = "line"
+regexes = ['''^\s*<TextBlock Grid.Column="0" Text="(?:Move|Resize) keys:" VerticalAlignment="Center"\s*$''']

@@ -11,10 +11,8 @@ namespace MagiDesk.Features.Zones;
 /// <summary>
 /// Tree-based zone editor. The layout is a <see cref="LayoutTree"/> of
 /// nested splits. Structural ops (split/merge/delete) stay local to one
-/// subtree, but dragging a divider moves every same-orientation divider that
-/// lies on the same grid line in lockstep (<see cref="AttachDividerDrag"/>),
-/// so a full row/column line behaves globally even though the tree nests one
-/// axis under the other. Dividers that don't share a line stay independent.
+/// subtree. Only dividers from the same explicit global cut move together.
+/// Local dividers stay independent even when aligned.
 ///
 /// Visuals are built once per structural change (<see cref="Rebuild"/>)
 /// and only repositioned during continuous operations (<see cref="Layout"/>).
@@ -54,6 +52,7 @@ public partial class ZoneEditorWindow : Window
         public required SplitNode Parent;
         public int ChildIdx;
         public Rect ParentBounds;  // fractional 0..1, updated every Layout()
+        public Action<MouseButtonEventArgs>? BeginDrag;
     }
     private readonly List<DividerVis> _dividers = new();
 
@@ -78,6 +77,7 @@ public partial class ZoneEditorWindow : Window
     internal ZoneEditorWindow(NativeMethods.RECT workArea, LayoutProfile? profile = null)
     {
         InitializeComponent();
+        MagiDesk.Native.AuxiliaryWindow.Attach(this);
         _workArea = workArea;
         _profile  = profile;
 
@@ -203,6 +203,40 @@ public partial class ZoneEditorWindow : Window
         var dv = new DividerVis { Rect = rect, Parent = parent, ChildIdx = childIdx };
         _dividers.Add(dv);
         AttachDividerDrag(dv);
+        rect.ToolTip = "拖动调整分区；右键设置局部 / 全局联动";
+        rect.MouseRightButtonDown += (_, e) =>
+        {
+            // Consume before the canvas handles right-click as a zone merge.
+            e.Handled = true;
+            var aligned = _tree.AlignedDividers(parent, childIdx);
+            bool hasPeers = aligned.Any(d => !LayoutTree.DividersLinked(parent, childIdx, d.node, d.index));
+            bool linked = parent.Children[childIdx].FollowingCutGroup is not null;
+            var menu = new ContextMenu();
+            var join = new MenuItem
+            {
+                Header = "设为全局联动（同列 / 同行）",
+                IsEnabled = !linked || hasPeers,
+            };
+            join.Click += (_, _) =>
+            {
+                _tree.LinkAlignedDividers(parent, childIdx);
+                Rebuild();
+            };
+            var separate = new MenuItem
+            {
+                Header = "取消联动（各段局部移动）",
+                IsEnabled = linked,
+            };
+            separate.Click += (_, _) =>
+            {
+                _tree.UnlinkDividerGroup(parent, childIdx);
+                Rebuild();
+            };
+            menu.Items.Add(join);
+            menu.Items.Add(separate);
+            menu.PlacementTarget = rect;
+            menu.IsOpen = true;
+        };
     }
 
     /// <summary>A divider dragged in lockstep with the grabbed one because it
@@ -227,14 +261,25 @@ public partial class ZoneEditorWindow : Window
 
         double startDividerPx = 0; // absolute pixel position of divider center at drag start
         double clickOffsetPx  = 0; // cursor click position minus divider center
-        // Every same-orientation divider collinear with the grabbed one — moved
-        // together so a full grid line drags as a unit. This is what makes row
-        // ("横") dividers behave as globally as column ("竖") dividers even
-        // though the tree nests one axis under the other. Always includes dv.
+        // Only the grabbed divider and its explicit global-cut peers.
         var linked = new List<LinkedDivider>();
 
-        dv.Rect.MouseLeftButtonDown += (_, e) =>
+        dv.BeginDrag = e =>
         {
+            // The outer axis of a generated grid is represented by one long
+            // boundary. Resolve a local segment before taking mouse capture.
+            var pointer = e.GetPosition(ZoneCanvas);
+            if (ZoneCanvas.ActualWidth <= 0 || ZoneCanvas.ActualHeight <= 0) return;
+            var local = _tree.PrepareLocalDivider(dv.Parent, dv.ChildIdx,
+                new Point(pointer.X / ZoneCanvas.ActualWidth, pointer.Y / ZoneCanvas.ActualHeight));
+            if (local is { } target)
+            {
+                e.Handled = true;
+                Rebuild();
+                _dividers.First(d => ReferenceEquals(d.Parent, target.node) && d.ChildIdx == target.index)
+                    .BeginDrag!(e);
+                return;
+            }
             bool vertical = dv.Parent.Orientation == SplitOrientation.Vertical;
             double canvasExtent = vertical ? ZoneCanvas.ActualWidth : ZoneCanvas.ActualHeight;
 
@@ -243,13 +288,11 @@ public partial class ZoneEditorWindow : Window
             parentExtentPx = (vertical ? dv.ParentBounds.Width : dv.ParentBounds.Height) * canvasExtent;
             clickOffsetPx  = startPx - startDividerPx;
 
-            // Collect all same-orientation dividers sitting on this same line
-            // (within ~1px). For a uniform grid these are the per-column row
-            // dividers, so dragging one row boundary moves the whole row.
+            // Alignment alone must never link independently created local cuts.
             linked.Clear();
             foreach (var d2 in _dividers)
             {
-                if (d2.Parent.Orientation != dv.Parent.Orientation) continue;
+                if (!LayoutTree.DividersLinked(dv.Parent, dv.ChildIdx, d2.Parent, d2.ChildIdx)) continue;
                 double linePx = DividerLinePx(d2, vertical);
                 if (Math.Abs(linePx - startDividerPx) > 1.5) continue;
                 double extentPx = (vertical ? d2.ParentBounds.Width : d2.ParentBounds.Height) * canvasExtent;
@@ -287,6 +330,7 @@ public partial class ZoneEditorWindow : Window
             dv.Rect.CaptureMouse();
             e.Handled = true;
         };
+        dv.Rect.MouseLeftButtonDown += (_, e) => dv.BeginDrag(e);
         dv.Rect.MouseMove += (_, e) =>
         {
             if (!dv.Rect.IsMouseCaptured) return;
@@ -357,6 +401,13 @@ public partial class ZoneEditorWindow : Window
     private void Layout()
     {
         if (ZoneCanvas.ActualWidth <= 0 || ZoneCanvas.ActualHeight <= 0) return;
+        if (_tree is null) return;
+        bool wholeGrid = _selectedIds.Count == 0;
+        BtnEven.IsEnabled = wholeGrid ? _tree.IsRectangularGrid() : _tree.CanEvenDistribute(_selectedIds.ToList());
+        BtnEven.ToolTip = wholeGrid
+            ? (BtnEven.IsEnabled ? "平均分配整个网格的行高和列宽" : "未选择分区时，仅完整网格支持整体平均分配")
+            : (BtnEven.IsEnabled ? "平均分配所选矩形区域中的行和列" : "请选择连续矩形区域，各行或各列的分区数量需一致");
+        ToolTipService.SetShowOnDisabled(BtnEven, true);
 
         double W = ZoneCanvas.ActualWidth;
         double H = ZoneCanvas.ActualHeight;
@@ -531,11 +582,7 @@ public partial class ZoneEditorWindow : Window
         if (GlobalActive)
         {
             SplitGlobal(snapAbsFrac, dir);
-            // Hoist the just-made cut (and any existing aligned cuts it lined up
-            // with) into a single full-span divider that drags as one. Prefer
-            // the cut's own direction so a horizontal cut becomes the global
-            // horizontal line (not demoted under a vertical split).
-            _tree.Canonicalize(dir);
+
         }
         else
         {
@@ -556,25 +603,7 @@ public partial class ZoneEditorWindow : Window
     /// position and read as one continuous divider.</summary>
     private void SplitGlobal(double absFrac, SplitOrientation dir)
     {
-        var targets = new List<(int id, double frac)>();
-        _tree.EnumerateLeaves(new Rect(0, 0, 1, 1), entry =>
-        {
-            var b = entry.Bounds;
-            if (dir == SplitOrientation.Vertical)
-            {
-                if (absFrac > b.X + 1e-6 && absFrac < b.X + b.Width - 1e-6)
-                    targets.Add((entry.Leaf.Id, (absFrac - b.X) / b.Width));
-            }
-            else
-            {
-                if (absFrac > b.Y + 1e-6 && absFrac < b.Y + b.Height - 1e-6)
-                    targets.Add((entry.Leaf.Id, (absFrac - b.Y) / b.Height));
-            }
-        });
-        // Splitting one leaf never changes another leaf's bounds, so the
-        // fractions collected above stay correct as we apply them.
-        foreach (var (id, frac) in targets)
-            _tree.SplitLeaf(id, dir, frac);
+        _tree.SplitGlobal(absFrac, dir);
     }
 
     private void ZoneCanvas_MouseRightButtonDown(object sender, MouseButtonEventArgs e)
@@ -745,7 +774,53 @@ public partial class ZoneEditorWindow : Window
 
     private void BtnResetGrid_Click(object sender, RoutedEventArgs e)
     {
-        _tree = LayoutTree.UniformGrid(2, 2);
+        ResetScopeHint.Text = _globalSplit ? "全局切割：同一行 / 列的分割线联动" : "局部切割：独立分割线不自动联动";
+        ResetGridError.Visibility = Visibility.Collapsed;
+        ResetGridPopup.IsOpen = true;
+        ResetRows.Focus();
+        ResetRows.SelectAll();
+    }
+
+    private void ResetGridPanel_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter) { ResetGridPopup.IsOpen = false; Root.Focus(); e.Handled = true; }
+        else if (e.Key == Key.Escape) { ResetGridPopup.IsOpen = false; e.Handled = true; }
+        else if (e.Key == Key.Delete) e.Handled = true;
+    }
+
+    private void ResetNumberStep_Click(object sender, RoutedEventArgs e)
+    {
+        string tag = (string)((FrameworkElement)sender).Tag;
+        StepResetNumber(tag.StartsWith("Rows") ? ResetRows : ResetColumns, tag.EndsWith("+") ? 1 : -1);
+        e.Handled = true;
+    }
+
+    private void ResetNumber_MouseWheel(object sender, MouseWheelEventArgs e)
+    {
+        if (e.Delta == 0) return;
+        var input = (string)((FrameworkElement)sender).Tag == "Rows" ? ResetRows : ResetColumns;
+        StepResetNumber(input, Math.Sign(e.Delta));
+        e.Handled = true;
+    }
+
+    private void StepResetNumber(TextBox input, int step)
+    {
+        int value = int.TryParse(input.Text, out int current) ? current : 2;
+        input.Text = Math.Clamp(value + step, 1, 12).ToString();
+    }
+
+    private void ResetGridNumber_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        // XAML initialization also raises TextChanged, before the tree exists.
+        if (ResetGridPopup?.IsOpen != true || ResetRows is null || ResetColumns is null) return;
+        if (!int.TryParse(ResetRows.Text, out int rows) || rows is < 1 or > 12
+            || !int.TryParse(ResetColumns.Text, out int columns) || columns is < 1 or > 12)
+        {
+            ResetGridError.Visibility = Visibility.Visible;
+            return;
+        }
+        ResetGridError.Visibility = Visibility.Collapsed;
+        _tree = LayoutTree.CreateEditorGrid(rows, columns, _globalSplit);
         _selectedIds.Clear();
         Rebuild();
     }
@@ -780,9 +855,13 @@ public partial class ZoneEditorWindow : Window
 
     private void ExecuteEvenDistribute()
     {
-        if (!_tree.EvenDistribute(_selectedIds.ToList())) return;
+        if (_selectedIds.Count == 0)
+        {
+            if (!_tree.EvenDistributeGrid()) return;
+        }
+        else if (!_tree.EvenDistribute(_selectedIds.ToList())) return;
         _selectedIds.Clear();
-        Layout();
+        Rebuild();
     }
 
     // ========================================================== keyboard

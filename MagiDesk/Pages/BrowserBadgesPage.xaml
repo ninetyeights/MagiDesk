@@ -9,13 +9,25 @@
                   VerticalScrollBarVisibility="Auto"
                   HorizontalScrollBarVisibility="Disabled"
                   Padding="0">
-        <Grid Margin="16,16,20,16">
+        <Grid Margin="16,0,20,16">
             <StackPanel HorizontalAlignment="Stretch" MaxWidth="1100">
-                <TextBlock Text="浏览器 Profile 徽标" FontSize="28" FontWeight="SemiBold"/>
-                <TextBlock Text="每个 Chrome profile 的窗口右上角浮一个胶囊，显示头像和 profile 名字，方便区分多窗口。每个 profile 可单独设颜色、自定义头像和开关。"
-                           Foreground="{DynamicResource TextFillColorSecondaryBrush}"
-                           TextWrapping="Wrap"
-                           Margin="0,2,0,20"/>
+                <Grid Margin="0,0,0,14">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Margin="0,0,24,0">
+                        <TextBlock Text="浏览器 Profile 徽标" FontSize="28" FontWeight="SemiBold"/>
+                        <TextBlock Text="每个 Chrome profile 的窗口右上角浮一个胶囊，显示头像和 profile 名字，方便区分多窗口。每个 profile 可单独设颜色、自定义头像和开关。" TextWrapping="Wrap"
+                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="0,2,0,0"/>
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" VerticalAlignment="Center" HorizontalAlignment="Center">
+                        <TextBlock Text="启用" FontSize="12" HorizontalAlignment="Center" Margin="0,0,0,2"
+                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                        <ui:ToggleSwitch x:Name="TsEnabled" HorizontalAlignment="Center"
+                                         Checked="Enabled_Changed" Unchecked="Enabled_Changed"/>
+                    </StackPanel>
+                </Grid>
 
                 <ui:InfoBar HorizontalAlignment="Stretch"
                             IsOpen="True"
@@ -25,33 +37,8 @@
                             Message="启用徽标或 MagiDesk 启动时，已打开的 Chrome 窗口会被一起前置，最终顺序不固定（Windows 的 owner 机制所致）。"
                             Margin="0,0,0,12"/>
 
-                <Expander Header="浏览器启动参数" Margin="0,0,0,12">
-                    <StackPanel Margin="12">
-                        <TextBlock Text="分别设置各浏览器的附加参数。含空格的值请使用双引号。仅在 MagiDesk 发起启动时使用；聚焦已有窗口不会重新应用参数，部分参数需完全退出浏览器后生效。"
-                                   TextWrapping="Wrap" Margin="0,0,0,12"/>
-                        <StackPanel x:Name="LaunchArgumentsPanel"/>
-                    </StackPanel>
-                </Expander>
 
                 <!-- Enable -->
-                <ui:Card HorizontalAlignment="Stretch" Padding="18,16" Margin="0,0,0,12">
-                    <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="Auto"/>
-                        </Grid.ColumnDefinitions>
-                        <StackPanel Grid.Column="0" VerticalAlignment="Center">
-                            <TextBlock Text="启用徽标" FontWeight="SemiBold"/>
-                            <TextBlock Text="每 3 秒扫描一次 Chrome 窗口，新开窗口会延迟出现徽标。"
-                                       FontSize="12"
-                                       Foreground="{DynamicResource TextFillColorSecondaryBrush}"
-                                       Margin="0,2,0,0"/>
-                        </StackPanel>
-                        <ui:ToggleSwitch x:Name="TsEnabled" Grid.Column="1"
-                                         VerticalAlignment="Center"
-                                         Checked="Enabled_Changed" Unchecked="Enabled_Changed"/>
-                    </Grid>
-                </ui:Card>
 
                 <StackPanel x:Name="BodyGroup">
 
@@ -128,22 +115,25 @@
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
                         <StackPanel Grid.Column="0" VerticalAlignment="Center">
-                            <TextBlock Text="解锁拖动" FontWeight="SemiBold"/>
-                            <TextBlock Text="开启后徽标变成可拖动（鼠标穿透关闭），拖到喜欢的位置后自动保存，对所有 profile 生效。"
+                            <TextBlock Text="调整位置" FontWeight="SemiBold"/>
+                            <ComboBox x:Name="PositionBrowser" MinWidth="200" HorizontalAlignment="Left"
+                                      Margin="0,8,8,6" SelectionChanged="PositionBrowser_Changed"/>
+                            <CheckBox x:Name="InheritPosition" Content="使用默认位置" Margin="0,0,8,6"
+                                      Checked="InheritPosition_Changed" Unchecked="InheritPosition_Changed"/>
+                            <TextBlock x:Name="TxtPositionAdjustment" Text="临时拖动徽标调整位置；点击完成或按 Esc 保存并恢复鼠标穿透，重启后保持锁定。"
                                        FontSize="12"
                                        Foreground="{DynamicResource TextFillColorSecondaryBrush}"
                                        TextWrapping="Wrap"
                                        Margin="0,2,8,0"/>
                         </StackPanel>
                         <ui:Button x:Name="BtnResetPos" Grid.Column="1"
-                                   Content="重置位置"
+                                   Content="恢复默认位置"
                                    Padding="12,6"
                                    Margin="0,0,10,0"
                                    VerticalAlignment="Center"
                                    Click="ResetPos_Click"/>
-                        <ui:ToggleSwitch x:Name="TsUnlocked" Grid.Column="2"
-                                         VerticalAlignment="Center"
-                                         Checked="Unlocked_Changed" Unchecked="Unlocked_Changed"/>
+                        <ui:Button x:Name="BtnAdjustPosition" Grid.Column="2" Content="调整位置" Padding="12,6"
+                                   VerticalAlignment="Center" Click="AdjustPosition_Click"/>
                     </Grid>
                 </ui:Card>
 
@@ -164,6 +154,12 @@
                                     Margin="0,0,0,10"
                                     PlaceholderText="搜索 profile（名称 / 浏览器 / 目录）"
                                     TextChanged="Search_Changed"/>
+                        <WrapPanel Margin="0,0,0,10">
+                            <ui:Button Content="全选结果" Click="SelectBadgeResults_Click" Margin="0,0,6,6"/>
+                            <ui:Button Content="清除选择" Click="ClearBadgeSelection_Click" Margin="0,0,6,6"/>
+                            <ui:Button Content="批量修改…" Click="BatchBadge_Click" Margin="0,0,8,6"/>
+                            <TextBlock x:Name="BadgeSelectionCount" VerticalAlignment="Center" Text="已选 0 项"/>
+                        </WrapPanel>
                         <StackPanel x:Name="ProfileList"/>
                         <TextBlock x:Name="TxtEmpty"
                                    Text="没找到浏览器 profile。请确认 Chrome / Edge / Brave / Vivaldi 等已安装并至少启动过一次。"

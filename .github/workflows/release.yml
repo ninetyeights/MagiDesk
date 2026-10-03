@@ -1,0 +1,80 @@
+name: Build release from tag
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: windows-2025
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        runtime: [win-x64, win-arm64]
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        with:
+          global-json-file: global.json
+      - name: Validate release tag
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          [xml]$project = Get-Content MagiDesk/MagiDesk.csproj
+          $version = [string]$project.Project.PropertyGroup.Version
+          if ($env:RELEASE_TAG -cne "v$version") { throw 'Tag must match the project version.' }
+          if ($version -notmatch '^\d+\.\d+\.\d+(-[a-zA-Z0-9.-]+)?$') { throw 'Invalid version.' }
+      - name: Security checks, tests and installer packaging
+        env:
+          RELEASE_RUNTIME: ${{ matrix.runtime }}
+        run: ./scripts/Publish-Release.ps1 -Runtime $env:RELEASE_RUNTIME -Installer
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-${{ matrix.runtime }}
+          path: publish/*
+          if-no-files-found: error
+          retention-days: 14
+
+  draft:
+    needs: build
+    runs-on: windows-2025
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: release-assets
+      - name: Create draft for offline signing
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          $files = @(Get-ChildItem release-assets -File | ForEach-Object FullName)
+          if ($files.Count -ne 8) { throw 'Expected two installers, two ZIPs and four checksum files.' }
+          $arguments = @('release','create',$env:RELEASE_TAG,'--verify-tag','--draft','--title',"MagiDesk $env:RELEASE_TAG",'--notes-file','docs/RELEASE-NOTES.md')
+          if ($env:RELEASE_TAG.Contains('-')) { $arguments += '--prerelease' }
+          & gh @arguments @files
+          if ($LASTEXITCODE -ne 0) { throw 'Draft release creation failed; existing releases are never overwritten.' }
+          'Draft ready. Sign these exact installers locally before publishing.' >> $env:GITHUB_STEP_SUMMARY

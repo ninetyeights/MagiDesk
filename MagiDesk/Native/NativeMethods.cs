@@ -4,6 +4,46 @@ namespace MagiDesk.Native;
 
 internal static class NativeMethods
 {
+    [DllImport("user32.dll")]
+    internal static extern uint GetDpiForWindow(IntPtr hwnd);
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct ResizeMinMaxInfo
+    {
+        public POINT Reserved, MaxSize, MaxPosition, MinTrackSize, MaxTrackSize;
+    }
+    [DllImport("user32.dll", EntryPoint = "SendMessageTimeoutW", SetLastError = true)]
+    internal static extern IntPtr QueryResizeLimits(IntPtr hwnd, uint message, IntPtr wParam,
+        ref ResizeMinMaxInfo info, uint flags, uint timeout, out IntPtr result);
+    [DllImport("dwmapi.dll", EntryPoint = "DwmSetWindowAttribute")]
+    internal static extern int DwmSetWindowAttributeInt32(IntPtr hwnd, int attribute, ref int value, int size);
+    // Undocumented DWM Peek entry used by Windows 10/11; callers must handle absence/failure.
+    // Five-argument ABI, also used by Windhawk's taskbar Aero Peek implementation.
+    [DllImport("dwmapi.dll", EntryPoint = "#113", ExactSpelling = true)]
+    internal static extern int DwmpActivateLivePreview([MarshalAs(UnmanagedType.Bool)] bool enabled,
+        IntPtr target, IntPtr topmost, uint type, IntPtr reserved);
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct DockThumbnailProperties
+    {
+        public uint Flags;
+        public RECT Destination, Source;
+        public byte Opacity;
+        [MarshalAs(UnmanagedType.Bool)] public bool Visible;
+        [MarshalAs(UnmanagedType.Bool)] public bool ClientOnly;
+    }
+    [DllImport("dwmapi.dll")] internal static extern int DwmRegisterThumbnail(IntPtr destination, IntPtr source, out IntPtr thumbnail);
+    [DllImport("dwmapi.dll")] internal static extern int DwmUnregisterThumbnail(IntPtr thumbnail);
+    [DllImport("dwmapi.dll")] internal static extern int DwmUpdateThumbnailProperties(IntPtr thumbnail, ref DockThumbnailProperties properties);
+    [DllImport("dwmapi.dll")] internal static extern int DwmQueryThumbnailSourceSize(IntPtr thumbnail, out POINT size);
+    [DllImport("ntdll.dll")]
+    internal static extern int NtQueryInformationProcess(IntPtr process, int informationClass,
+        IntPtr information, int length, out int returnLength);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    internal static extern IntPtr OpenProcess(uint access, bool inheritHandle, uint processId);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    internal static extern bool QueryFullProcessImageName(IntPtr process, uint flags,
+        System.Text.StringBuilder path, ref int size);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    internal static extern bool CloseHandle(IntPtr handle);
     public delegate IntPtr HookProc(int nCode, IntPtr wParam, IntPtr lParam);
 
     [StructLayout(LayoutKind.Sequential)]
@@ -134,6 +174,13 @@ internal static class NativeMethods
 
     [DllImport("user32.dll")]
     public static extern int GetWindowLong(IntPtr hWnd, int nIndex);
+
+    [DllImport("user32.dll", EntryPoint = "SetWindowLongW", SetLastError = true)]
+    public static extern int SetWindowLong(IntPtr hWnd, int nIndex, int value);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool SetLayeredWindowAttributes(IntPtr hWnd, uint colorKey, byte alpha, uint flags);
 
     // --- WinEventHook (for zone drag detection) -----------------------------
 

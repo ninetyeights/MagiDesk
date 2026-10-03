@@ -23,6 +23,11 @@ internal sealed class AsyncResourceCache<T> where T : class
     private readonly int _capacity;
     private readonly string? _diagnosticName;
     private long _bytes;
+    internal string MemorySummary()
+    {
+        lock (_sync)
+            return $"{_diagnosticName}:items={_cache.Count},pending={_pending.Count},MiB={_bytes / 1048576.0:F2},budgetMiB={_budget / 1048576.0:F0}";
+    }
 
     public AsyncResourceCache(Func<string, T?> load, Func<T, long> cost,
         long budget = 32 * 1024 * 1024, int capacity = 512, int concurrency = 4, string? diagnosticName = null)

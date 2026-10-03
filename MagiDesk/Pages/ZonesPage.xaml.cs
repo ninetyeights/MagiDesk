@@ -6,6 +6,8 @@ using System.Windows.Media.Effects;
 using System.Windows.Shapes;
 using MagiDesk.Config;
 using MagiDesk.Features.Zones;
+using MagiDesk.Features.QuickGrid;
+using System.Windows.Media.Imaging;
 
 namespace MagiDesk.Pages;
 
@@ -13,6 +15,7 @@ public partial class ZonesPage : Page
 {
     private bool _loading;
     private List<MonitorSlot> _monitors = new();
+    private Dictionary<string, BitmapImage?> _wallpapers = new();
     private string? _selectedMonitorId;
 
     // Card visuals by key, so Refresh() can update the "assigned" highlight
@@ -31,7 +34,7 @@ public partial class ZonesPage : Page
     }
 
     private void OnConfigChanged()
-        => Dispatcher.BeginInvoke(new Action(PullToggles));
+        => Dispatcher.BeginInvoke(new Action(() => { PullToggles(); RefreshCardHighlights(); }));
 
     private void PullToggles()
     {
@@ -48,10 +51,11 @@ public partial class ZonesPage : Page
     private void RebuildAll()
     {
         _monitors = MonitorEnumerator.All();
+        _wallpapers = MonitorWallpaper.Load(_monitors);
         // Restore last-selected monitor if it still exists; otherwise fall
         // back to the first one. Either way, don't overwrite an explicit
         // selection the user made earlier in this session.
-        if (_selectedMonitorId is null)
+        if (_selectedMonitorId is null || !_monitors.Any(m => m.Id == _selectedMonitorId))
         {
             var saved = AppConfig.Current.SelectedMonitorId;
             if (saved is not null && _monitors.Any(m => m.Id == saved))
@@ -121,6 +125,10 @@ public partial class ZonesPage : Page
             };
             ApplyDefaultSurface(card);
             ApplySelection(card, selected);
+            card.BorderThickness = new Thickness(selected ? 3 : 1);
+            bool hasWallpaper = _wallpapers.TryGetValue(m.Id, out var wallpaper) && wallpaper is not null;
+            if (hasWallpaper)
+                card.Background = new ImageBrush(wallpaper) { Stretch = Stretch.UniformToFill };
 
             var stack = new StackPanel
             {
@@ -162,7 +170,43 @@ public partial class ZonesPage : Page
                 stack.Children.Add(dpiText);
             }
 
-            card.Child = stack;
+            if (hasWallpaper)
+            {
+                // A small scrim keeps monitor information readable on bright wallpaper.
+                foreach (var text in stack.Children.OfType<TextBlock>())
+                    text.Foreground = Brushes.White;
+                card.Child = new Border
+                {
+                    Background = new SolidColorBrush(Color.FromArgb(selected ? (byte)65 : (byte)145, 0, 0, 0)),
+                    CornerRadius = new CornerRadius(4),
+                    Child = stack,
+                };
+            }
+            else card.Child = stack;
+            if (selected)
+            {
+                card.BorderBrush = Brushes.White;
+                var content = card.Child;
+                card.Child = null;
+                var overlay = new Grid();
+                overlay.Children.Add(content);
+                overlay.Children.Add(new System.Windows.Shapes.Path
+                {
+                    Data = Geometry.Parse("M 2,11 L 8,17 L 21,3"),
+                    Width = 24,
+                    Height = 22,
+                    Stroke = Brushes.White,
+                    StrokeThickness = 3,
+                    StrokeStartLineCap = PenLineCap.Round,
+                    StrokeEndLineCap = PenLineCap.Round,
+                    StrokeLineJoin = PenLineJoin.Round,
+                    HorizontalAlignment = HorizontalAlignment.Right,
+                    VerticalAlignment = VerticalAlignment.Top,
+                    Margin = new Thickness(5),
+                    IsHitTestVisible = false,
+                });
+                card.Child = overlay;
+            }
             card.MouseLeftButtonUp += (_, _) =>
             {
                 _selectedMonitorId = (string)card.Tag;
@@ -226,6 +270,12 @@ public partial class ZonesPage : Page
                 deletable:   true,
                 onEdit:      () => TryEditAndRegister(p, isNew: false),
                 onDelete:    () => DeleteProfile(p));
+            var menu = new ContextMenu();
+            var rename = new MenuItem { Header = "重命名…" };
+            rename.Click += (_, _) => RenameProfile(p);
+            menu.Items.Add(rename);
+            card.ContextMenu = menu;
+            card.ToolTip = "右键可重命名布局";
             CustomList.Items.Add(card);
             _cardByRef[refStr] = card;
         }
@@ -409,8 +459,7 @@ public partial class ZonesPage : Page
     private bool IsAssignedToSelected(string layoutRef)
     {
         if (_selectedMonitorId is null) return false;
-        return AppConfig.Current.MonitorAssignments.TryGetValue(_selectedMonitorId, out var cur)
-               && cur == layoutRef;
+        return GridLayout.ResolveLayoutReference(_selectedMonitorId, AppConfig.Current) == layoutRef;
     }
 
     private void AssignToSelected(string layoutRef)
@@ -493,6 +542,37 @@ public partial class ZonesPage : Page
             Owner = Window.GetWindow(this),
         };
         return editor.ShowDialog() == true;
+    }
+
+    private void RenameProfile(LayoutProfile profile)
+    {
+        var owner = Window.GetWindow(this);
+        var dialog = new Window
+        {
+            Title = "重命名布局", Owner = owner, Width = 360,
+            SizeToContent = SizeToContent.Height, ResizeMode = System.Windows.ResizeMode.NoResize,
+            WindowStartupLocation = owner is null ? WindowStartupLocation.CenterScreen : WindowStartupLocation.CenterOwner,
+        };
+        MagiDesk.Native.AuxiliaryWindow.Attach(dialog);
+        var input = new TextBox { Text = profile.Name, Margin = new Thickness(0, 8, 0, 14) };
+        var save = new Button { Content = "保存", IsDefault = true, MinWidth = 76, IsEnabled = !string.IsNullOrWhiteSpace(input.Text) };
+        var cancel = new Button { Content = "取消", IsCancel = true, MinWidth = 76, Margin = new Thickness(0, 0, 8, 0) };
+        input.TextChanged += (_, _) => save.IsEnabled = !string.IsNullOrWhiteSpace(input.Text);
+        save.Click += (_, _) => dialog.DialogResult = true;
+        var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
+        buttons.Children.Add(cancel); buttons.Children.Add(save);
+        var content = new StackPanel { Margin = new Thickness(20) };
+        content.Children.Add(new TextBlock { Text = "布局名称" });
+        content.Children.Add(input); content.Children.Add(buttons);
+        dialog.Content = content;
+        dialog.Loaded += (_, _) => { input.Focus(); input.SelectAll(); };
+        if (dialog.ShowDialog() != true) return;
+        var name = input.Text.Trim();
+        if (name.Length == 0 || name == profile.Name) return;
+        profile.Name = name;
+        AppConfig.Current.Save();
+        RebuildCustomCards();
+        RefreshCardHighlights();
     }
 
     private void DeleteProfile(LayoutProfile p)

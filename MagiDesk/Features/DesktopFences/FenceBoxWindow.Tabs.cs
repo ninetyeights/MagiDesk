@@ -141,6 +141,7 @@ internal sealed partial class FenceBoxWindow
     {
         if (_desktopSurface || _closed) return false;
         if (!CommitTabEdit()) return false;
+        _selectAfterBack = null;
         FlushRect(); _saveTimer.Stop(); _renameTimer?.Stop(); _refreshDebounce?.Stop();
         _refreshVersion.Next(); _watcher?.Dispose(); _watcher = null; _watchedPath = null;
         _pageViews[_box.Id] = new(_currentPath, _navigationHistory.Reverse().ToArray(), _forwardHistory.Reverse().ToArray(),

@@ -1,0 +1,16 @@
+{
+  "counts": {
+    "files": 6351,
+    "bytes": 1401091104,
+    "archive_entries": 1924,
+    "history_blobs": 452
+  },
+  "matches": [],
+  "errors": [],
+  "limitations": [
+    ".vs caches excluded",
+    "Compressed installer payload not unpacked; raw strings only",
+    "No remote branches fetched, local reachable Git objects only",
+    "Pattern detection cannot prove absence of credentials"
+  ]
+}

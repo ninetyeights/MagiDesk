@@ -36,21 +36,31 @@ internal sealed class GridLayout
         return Build(workArea, cfg.ZonesRows, cfg.ZonesColumns, cfg.ZonesSpacing);
     }
 
-    private static LayoutTree? ResolveTree(string? monitorId, AppConfig cfg)
+    internal static string? ResolveLayoutReference(string? monitorId, AppConfig cfg)
     {
         if (monitorId is not null && cfg.MonitorAssignments.TryGetValue(monitorId, out var layoutRef))
         {
             if (BuiltInTemplates.IsBuiltIn(layoutRef, out var key))
-                return BuiltInTemplates.Find(key)?.Build();
+            {
+                if (BuiltInTemplates.Find(key) is not null) return layoutRef;
+            }
             if (Guid.TryParse(layoutRef, out var id))
             {
                 var profile = cfg.Layouts.FirstOrDefault(p => p.Id == id);
-                if (profile?.Tree is not null) return profile.ToTree();
+                if (profile?.Tree is not null) return profile.Id.ToString();
             }
         }
         // No assignment → first custom profile, if any, acts as the default.
         var first = cfg.Layouts.FirstOrDefault(p => p.Tree is not null);
-        return first?.ToTree();
+        return first?.Id.ToString();
+    }
+
+    private static LayoutTree? ResolveTree(string? monitorId, AppConfig cfg)
+    {
+        var reference = ResolveLayoutReference(monitorId, cfg);
+        if (reference is null) return null;
+        if (BuiltInTemplates.IsBuiltIn(reference, out var key)) return BuiltInTemplates.Find(key)?.Build();
+        return cfg.Layouts.FirstOrDefault(p => p.Id.ToString() == reference)?.ToTree();
     }
 
     public static GridLayout FromTree(NativeMethods.RECT workArea, LayoutTree tree)

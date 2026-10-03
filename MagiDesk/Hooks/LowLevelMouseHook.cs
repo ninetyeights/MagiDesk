@@ -17,6 +17,7 @@ internal sealed class LowLevelMouseHook : IDisposable
     private readonly HookProc _proc;          // kept alive against GC
     private IntPtr _handle;
     private long _lastDelayReport = -1000;
+    internal bool DragDiagnosticsActive { get; set; }
 
     public LowLevelMouseHook(MouseEventHandler onEvent)
     {
@@ -66,7 +67,8 @@ internal sealed class LowLevelMouseHook : IDisposable
     private IntPtr HookCallback(int nCode, IntPtr wParam, IntPtr lParam)
     {
         if (nCode < 0) return CallNextHookEx(IntPtr.Zero, nCode, wParam, lParam);
-        bool trace = StartupTrace.Enabled;
+        bool dragTrace = DragDiagnosticsActive;
+        bool trace = StartupTrace.Enabled || dragTrace;
         long entered = trace ? Stopwatch.GetTimestamp() : 0;
         uint arrived = unchecked((uint)Environment.TickCount);
         var data = Marshal.PtrToStructure<MSLLHOOKSTRUCT>(lParam);
@@ -87,6 +89,8 @@ internal sealed class LowLevelMouseHook : IDisposable
                 _lastDelayReport = now;
                 StartupTrace.Mark("mouse-hook.event-delay",
                     $"msg={wParam.ToInt32():X} arrivalMs={arrivalMs?.ToString() ?? "unknown"} ownMs={ownMs:F2} nextMs={nextMs:F2} swallowed={swallowed}");
+                if (dragTrace)
+                    DiagnosticLog.Write($"{DateTime.Now:HH:mm:ss.fff} RESIZE-HOOK msg={wParam.ToInt32():X} arrivalMs={arrivalMs?.ToString() ?? "unknown"} ownMs={ownMs:F2} nextMs={nextMs:F2} swallowed={swallowed}\n");
             }
         }
         return result;

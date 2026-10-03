@@ -30,6 +30,8 @@ namespace MagiDesk.Pages
             _loading = true;
             var cfg = AppConfig.Current;
             TsEnabled.IsChecked = cfg.WindowDragEnabled;
+            TsSymmetricResize.IsChecked = cfg.ResizeSymmetricWithShift;
+            TsLinkedResize.IsChecked = cfg.LinkedWindowResizeEnabled;
             Rb3x3.IsChecked = cfg.ResizeMode == CfgResizeMode.ThreeByThree;
             Rb2x2.IsChecked = cfg.ResizeMode == CfgResizeMode.TwoByTwoCorners;
 
@@ -59,6 +61,20 @@ namespace MagiDesk.Pages
             AppConfig.Current.WindowDragEnabled = TsEnabled.IsChecked == true;
             AppConfig.Current.Save();
             RefreshEnabledUi();
+        }
+
+        private void SymmetricResize_Changed(object sender, RoutedEventArgs e)
+        {
+            if (_loading) return;
+            AppConfig.Current.ResizeSymmetricWithShift = TsSymmetricResize.IsChecked == true;
+            AppConfig.Current.Save();
+        }
+
+        private void LinkedResize_Changed(object sender, RoutedEventArgs e)
+        {
+            if (_loading) return;
+            AppConfig.Current.LinkedWindowResizeEnabled = TsLinkedResize.IsChecked == true;
+            AppConfig.Current.Save();
         }
 
         private void ResizeMode_Changed(object sender, RoutedEventArgs e)

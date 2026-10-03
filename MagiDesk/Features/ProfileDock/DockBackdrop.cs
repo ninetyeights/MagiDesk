@@ -13,8 +13,8 @@ namespace MagiDesk.Features.ProfileDock;
 /// route works on layered (AllowsTransparency) windows like this one, tints from
 /// a colour we control, and works on Windows 10 as well.
 ///
-/// The blur fills the whole HWND rectangle and ignores WPF's rounded Border, so
-/// <see cref="SetRoundedRegion"/> clips the corners at the window level.
+/// Floating docks on Windows 11 use a non-layered composition frame so DWM
+/// rounds both the material and the window, as it does for desktop fences.
 /// </summary>
 internal static class DockBackdrop
 {
@@ -107,9 +107,24 @@ internal static class DockBackdrop
         finally { Marshal.FreeHGlobal(buf); }
     }
 
-    // NOTE — no corner rounding here on purpose. The blur fills the whole HWND
-    // rectangle, and a layered (AllowsTransparency) window takes its shape from
-    // the alpha channel, not from SetWindowRgn — which it simply ignores. So with
-    // this blur the bar is necessarily square-cornered, same as the real
-    // Windows taskbar. Rounded corners are only available on the solid fallback.
+    [StructLayout(LayoutKind.Sequential)]
+    private struct GlassMargins { public int Left, Right, Top, Bottom; }
+    [DllImport("dwmapi.dll")]
+    private static extern int DwmExtendFrameIntoClientArea(IntPtr hwnd, ref GlassMargins margins);
+    [DllImport("dwmapi.dll")]
+    private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attribute, ref int value, int size);
+
+    internal static bool TryEnableRoundedAcrylic(IntPtr hwnd, Color tint, bool roundedCorners)
+    {
+        int none = 1, rounded = roundedCorners ? 2 : 1, border = unchecked((int)0xFFFFFFFE);
+        DwmSetWindowAttribute(hwnd, 38, ref none, sizeof(int));
+        var margins = new GlassMargins();
+        int frameHr = DwmExtendFrameIntoClientArea(hwnd, ref margins);
+        int cornerHr = DwmSetWindowAttribute(hwnd, 33, ref rounded, sizeof(int));
+        DwmSetWindowAttribute(hwnd, 34, ref border, sizeof(int));
+        bool applied = TryEnableAcrylic(hwnd, tint);
+        MagiDesk.Infrastructure.DiagnosticLog.Write(
+            $"DOCK-CORNERS compositionFrame=true frameHr=0x{frameHr:X8} cornerHr=0x{cornerHr:X8} acrylic={applied}");
+        return applied;
+    }
 }

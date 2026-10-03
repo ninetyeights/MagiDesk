@@ -68,7 +68,11 @@ public sealed partial class DesktopFenceService
         var target = _windows.Values.FirstOrDefault(w => NativeMethods.MonitorFromWindow(new WindowInteropHelper(w).Handle, 2) == monitor)
             ?? _windows.Values.First();
         target.FocusForPeek();
-        MagiDesk.Infrastructure.DiagnosticLog.Write("FENCE-PEEK shown\n");
+        // Also queue the group pass if this box was already active, in which
+        // case WPF need not fire Activated again.
+        var targetId = _windows.First(pair => ReferenceEquals(pair.Value, target)).Key;
+        BringBoxForward(targetId, "peek-group");
+        MagiDesk.Infrastructure.DiagnosticLog.Write($"FENCE-PEEK shown boxes={_windows.Count}\n");
     }
 
     internal void DismissPeek(bool restoreFocus)

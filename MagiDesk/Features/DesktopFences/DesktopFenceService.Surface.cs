@@ -50,6 +50,13 @@ public sealed partial class DesktopFenceService
 
     private void OnDesktopDisplaysChanged(object? sender, EventArgs e) => _ui.BeginInvoke(new Action(QueueDesktopTopologyRefresh));
 
+    private void OnDesktopSessionSwitch(object sender, Microsoft.Win32.SessionSwitchEventArgs e)
+        => _ui.BeginInvoke(new Action(() =>
+        {
+            DiagnosticLog.Write($"DESKTOP-SESSION reason={e.Reason}\n");
+            QueueDesktopTopologyRefresh();
+        }));
+
     internal void SyncDesktopSurfaceSettings(DesktopShellMenu.ViewSettings settings)
     {
         _desktopViewSettings = settings;
@@ -161,15 +168,17 @@ public sealed partial class DesktopFenceService
         if (_unifiedSurface)
         {
             _desktopTopologyTimer = new DispatcherTimer(DispatcherPriority.Background, _ui)
-            { Interval = TimeSpan.FromMilliseconds(250) };
+            { Interval = TimeSpan.FromMilliseconds(1000) };
             _desktopTopologyTimer.Tick += (_, _) =>
             {
                 _desktopTopologyTimer?.Stop();
                 if (!_active || !_unifiedSurface) return;
                 if (_surfaceItems is { } items) RenderDesktopSurface(items);
+                foreach (var box in _windows.Values) box.RecoverDesktopBoxBounds(_desktopMonitors);
                 DiagnosticLog.Write($"DESKTOP-MONITORS topology screens={_desktopMonitors.Count}\n");
             };
             Microsoft.Win32.SystemEvents.DisplaySettingsChanged += OnDesktopDisplaysChanged;
+            Microsoft.Win32.SystemEvents.SessionSwitch += OnDesktopSessionSwitch;
             // The guard discovers HWND changes off the UI thread. No repeated COM
             // desktop enumeration here: only consume its recovery notification.
             _desktopRecoveryTimer = new DispatcherTimer(DispatcherPriority.Background, _ui)
@@ -262,6 +271,7 @@ public sealed partial class DesktopFenceService
         _desktopTopologyTimer?.Stop();
         _desktopTopologyTimer = null;
         Microsoft.Win32.SystemEvents.DisplaySettingsChanged -= OnDesktopDisplaysChanged;
+        Microsoft.Win32.SystemEvents.SessionSwitch -= OnDesktopSessionSwitch;
         foreach (var surface in _desktopSurfaces.Values) surface.Close();
         _desktopSurfaces.Clear();
         _surfaceItems = null;

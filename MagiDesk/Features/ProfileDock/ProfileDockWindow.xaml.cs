@@ -30,6 +30,7 @@ public partial class ProfileDockWindow : Window
     private const double PillHeight    = 3;
     private const double IdlePillWidth = 6;
     private const double DockCornerRadius = 8;
+    private readonly bool _nativeRounded;
 
     // Drag state.
     private bool _dragging;
@@ -50,11 +51,11 @@ public partial class ProfileDockWindow : Window
     private readonly Dictionary<string, Border> _buttonWrappers = new();
 
     /// <summary>Fired when the user clicks a profile button.</summary>
-    public event Action<ChromeProfile, Button>? ProfileClicked;
+    public event Action<DockItem, Button>? ItemClicked;
 
     /// <summary>Floating vs AppBar. Must be set before <see cref="Window.Show"/>;
     /// the service recreates the window when the user switches mode.</summary>
-    public DockMode Mode { get; set; } = DockMode.Floating;
+    public DockMode Mode { get; }
 
     // ---- Per-monitor targeting (set by the service before Show) ----------
     /// <summary>The monitor (<c>szDevice</c>) this dock window belongs to. Used
@@ -77,9 +78,49 @@ public partial class ProfileDockWindow : Window
     private AppBarHost? _appBar;
     private bool _appBarMode;
 
-    public ProfileDockWindow()
+    public ProfileDockWindow(DockMode mode = DockMode.Floating)
     {
+        Mode = mode;
+        _nativeRounded = mode == DockMode.Floating && OperatingSystem.IsWindowsVersionAtLeast(10, 0, 22000);
         InitializeComponent();
+        MagiDesk.Native.AuxiliaryWindow.Attach(this);
+        if (_nativeRounded)
+        {
+            AllowsTransparency = false;
+            WindowStyle = WindowStyle.SingleBorderWindow;
+            System.Windows.Shell.WindowChrome.SetWindowChrome(this, new System.Windows.Shell.WindowChrome
+            {
+                CaptionHeight = 0,
+                ResizeBorderThickness = new Thickness(0),
+                GlassFrameThickness = new Thickness(0),
+                UseAeroCaptionButtons = false,
+                CornerRadius = new CornerRadius(0)
+            });
+            // SizeToContent includes the caption/frame allowance of SingleBorderWindow,
+            // even though WindowChrome has extended the client surface over it.
+            SizeToContent = SizeToContent.Manual;
+            DockRoot.HorizontalAlignment = HorizontalAlignment.Left;
+            DockRoot.VerticalAlignment = VerticalAlignment.Top;
+        }
+        Opacity = 0;
+        Loaded += (_, _) =>
+        {
+            FitFloatingContent();
+            UpdateLayout();
+            if (_appBarMode) RepositionAppBar();
+            else RestoreFloatingPosition();
+            UpdateLayout();
+            // The native material isn't controlled by WPF Opacity. Enable it only
+            // after the HWND has its final content size and monitor position.
+            if (!_appBarMode)
+            {
+                _acrylic = ApplyDockBackdrop(new WindowInteropHelper(this).Handle, DockPalette.For(AppConfig.Current).AcrylicTint);
+                ApplyTheme();
+            }
+            Opacity = 1;
+            StartFloatingBehavior();
+            DiagnosticLog.Write($"DOCK-LAYOUT first-visible wrap={WrapItems} width={ActualWidth:F0} height={ActualHeight:F0}");
+        };
         DockRoot.LostMouseCapture += (_, _) => FinishPositionDrag();
         DockPalette.EnsureWatching();
         DockPalette.Changed += OnSystemThemeChanged;
@@ -95,6 +136,14 @@ public partial class ProfileDockWindow : Window
     {
         using var trace = StartupTrace.Measure("dock.theme");
         var p = DockPalette.For(AppConfig.Current);
+        var theme = (p, _appBarMode, _acrylic, AppConfig.Current.DockRoundedCorners);
+        if (_appliedTheme == theme)
+        {
+            // Accent can change while the light/dark material stays identical.
+            if (_lastStates is not null) UpdateStates(_lastStates);
+            return;
+        }
+        _appliedTheme = theme;
 
         // With the blur active the tint comes from the composition layer, so the
         // Border must stay (almost) clear or it would paint over it; otherwise
@@ -105,27 +154,27 @@ public partial class ProfileDockWindow : Window
         // bar would stop responding to drags. Alpha 1 is invisible over the
         // acrylic but keeps the surface grabbable.
         SetBrush("DockBackgroundBrush",
-            _acrylic ? Color.FromArgb(0x01, 0x00, 0x00, 0x00) : p.Background);
-        SetBrush("DockBorderBrush",      p.Border);
+            _acrylic ? _nativeRounded ? Colors.Transparent : Color.FromArgb(0x01, 0x00, 0x00, 0x00) : p.Background);
+        // Native composition already supplies the rounded outline. A second WPF
+        // stroke reads as a black hairline in light mode, especially at fractional DPI.
+        SetBrush("DockBorderBrush", _appBarMode ? p.Border : Colors.Transparent);
         SetBrush("DockHoverBrush",       p.Hover);
+        SetBrush("DockScrollBackgroundBrush", p.Background);
         SetBrush("DockPressedBrush",     p.Pressed);
         SetBrush("DockTextBrush",        p.Text);
         SetBrush("DockSeparatorBrush",   p.Separator);
         SetBrush("DockGroupBgBrush",     p.GroupBackground);
         SetBrush("DockGroupBorderBrush", p.GroupBorder);
 
-        // Square while the blur is on: it fills the window rect and can't be
-        // clipped (see DockBackdrop), which is also how the real taskbar looks.
-        // The solid fallback paints the bar itself, so it can round normally.
-        DockRoot.CornerRadius    = new CornerRadius(_appBarMode || _acrylic ? 0 : DockCornerRadius);
+        // On Windows 11 DWM rounds the entire composition surface, including acrylic.
+        DockRoot.CornerRadius    = new CornerRadius(!_appBarMode && AppConfig.Current.DockRoundedCorners ? DockCornerRadius : 0);
         DockRoot.BorderThickness = _appBarMode ? new Thickness(0, 0, 0, 1) : new Thickness(1);
 
         // Re-tint the blur so a theme flip (or a forced Light dock on a dark
         // Windows) restains the material, not just the WPF chrome.
         var h = new WindowInteropHelper(this).Handle;
         if (_acrylic && h != IntPtr.Zero)
-            using (StartupTrace.Measure("dock.theme-backdrop")) DockBackdrop.TryEnableAcrylic(h, p.AcrylicTint);
-
+            using (StartupTrace.Measure("dock.theme-backdrop")) ApplyDockBackdrop(h, p.AcrylicTint);
         // Indicator fills are assigned imperatively, so re-run the last state.
         if (_lastStates is not null) UpdateStates(_lastStates);
     }
@@ -134,6 +183,76 @@ public partial class ProfileDockWindow : Window
     {
         ButtonPanel.HorizontalAlignment = _appBarMode && AppConfig.Current.BrowserDockAlignLeft
             ? HorizontalAlignment.Left : HorizontalAlignment.Center;
+        ItemsViewport.HorizontalAlignment = ButtonPanel.HorizontalAlignment;
+        DockContent.HorizontalAlignment = ButtonPanel.HorizontalAlignment;
+    }
+
+    private bool ApplyDockBackdrop(IntPtr handle, Color tint)
+    {
+        bool rounded = !_appBarMode && AppConfig.Current.DockRoundedCorners;
+        if (_appliedBackdrop == (handle, tint, rounded)) return true;
+        if (_nativeRounded)
+        {
+            if (HwndSource.FromHwnd(handle)?.CompositionTarget is { } target)
+                target.BackgroundColor = Colors.Transparent;
+            bool applied = DockBackdrop.TryEnableRoundedAcrylic(handle, tint, rounded);
+            if (applied) _appliedBackdrop = (handle, tint, rounded);
+            return applied;
+        }
+        // Older systems keep a rounded solid floating surface; AppBar keeps its acrylic.
+        bool success = _appBarMode && DockBackdrop.TryEnableAcrylic(handle, tint);
+        if (success) _appliedBackdrop = (handle, tint, rounded);
+        return success;
+    }
+
+    private (DockPalette Palette, bool AppBar, bool Acrylic, bool Rounded)? _appliedTheme;
+    private (IntPtr Handle, Color Tint, bool Rounded)? _appliedBackdrop;
+
+    private void FitFloatingContent()
+    {
+        if (!_nativeRounded || _closed) return;
+        var handle = new WindowInteropHelper(this).Handle;
+        if (handle == IntPtr.Zero) return;
+        // Measure the actual dock independently of the old HWND size so both growing
+        // and shrinking wrapped content work. The viewport already caps its width.
+        // Child removal invalidates layout asynchronously. Flush the viewport's
+        // cached extent before measuring the root with the same constraint again.
+        ButtonPanel.InvalidateMeasure();
+        ItemsViewport.InvalidateMeasure();
+        DockRoot.InvalidateMeasure();
+        UpdateLayout();
+        DockRoot.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+        var desired = DockRoot.DesiredSize;
+        if (desired.Width <= 0 || desired.Height <= 0) return;
+        var dpi = VisualTreeHelper.GetDpi(this);
+        int width = (int)Math.Ceiling(desired.Width * dpi.DpiScaleX);
+        int height = (int)Math.Ceiling(desired.Height * dpi.DpiScaleY);
+        if (!NativeMethods.GetWindowRect(handle, out var before)) return;
+        var cfg = AppConfig.Current;
+        bool anchored = _positionRestored && cfg.DockFloatingEdge is 1 or 2;
+        var point = anchored
+            ? DockFloatingLayout.Anchor(MonitorWorkAreaPx, width, height, cfg.DockFloatingEdge,
+                cfg.DockFloatingAlignment, (int)Math.Round(Math.Clamp(cfg.DockFloatingGap, 0, 48) * dpi.DpiScaleX))
+            : new DockPoint { X = before.Left, Y = before.Top };
+        if (before.Width == width && before.Height == height && before.Left == point.X && before.Top == point.Y) return;
+        // Resize and realign together, rather than waiting for a later mouse event.
+        bool applied = NativeMethods.SetWindowPos(handle, IntPtr.Zero, point.X, point.Y, width, height,
+            SWP_NOZORDER | SWP_NOACTIVATE);
+        DiagnosticLog.Write($"DOCK-FIT before={before.Width}x{before.Height} content={desired.Width:F1}x{desired.Height:F1} target={width}x{height} dpi={dpi.DpiScaleX:F2} applied={applied}");
+    }
+
+    private bool _contentFitQueued;
+    private void QueueContentFit()
+    {
+        if (!_nativeRounded || _closed || _contentFitQueued) return;
+        _contentFitQueued = true;
+        Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded, new Action(() =>
+        {
+            _contentFitQueued = false;
+            if (_closed) return;
+            FitFloatingContent();
+            QueueFloatingRefresh();
+        }));
     }
 
     private bool _acrylic;
@@ -180,7 +299,13 @@ public partial class ProfileDockWindow : Window
         }
         // WM_SETTINGCHANGE, WM_THEMECHANGED, DWM composition/accent changes.
         // Listen on every dock, including floating windows without an AppBar.
-        if (IsThemeChangeMessage(msg)) OnSystemThemeChanged();
+        if (IsThemeChangeMessage(msg))
+        {
+            if (msg is 0x031E or 0x031A) { _appliedBackdrop = null; _appliedTheme = null; }
+            OnSystemThemeChanged();
+        }
+        if (msg is 0x02E0 or 0x007E or 0x001A) QueueFloatingRefresh(); // DPI, display, work area
+        if (msg is 0x02E0 or 0x007E or 0x001A) QueueIconSizeRefresh();
         return IntPtr.Zero;
     }
 
@@ -203,10 +328,10 @@ public partial class ProfileDockWindow : Window
         if (Mode == DockMode.AppBar)
             using (StartupTrace.Measure("dock.appbar")) EnableAppBarMode(h);
 
-        // Acrylic blur. Has to come after AppBar mode is resolved — the corner
-        // clipping differs between the flush strip and the floating island.
-        using (StartupTrace.Measure("dock.initial-backdrop"))
-            _acrylic = DockBackdrop.TryEnableAcrylic(h, DockPalette.For(AppConfig.Current).AcrylicTint);
+        // Floating material is deferred until Loaded, after final placement.
+        if (_appBarMode)
+            using (StartupTrace.Measure("dock.initial-backdrop"))
+                _acrylic = ApplyDockBackdrop(h, DockPalette.For(AppConfig.Current).AcrylicTint);
         ApplyTheme();
 
         using (StartupTrace.Measure("dock.fullscreen-start")) FullscreenWatcher.EnsureStarted();
@@ -289,12 +414,19 @@ public partial class ProfileDockWindow : Window
     /// configured button size and separator style.</summary>
     private int MeasureDockHeightPx()
     {
-        DockRoot.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
-        double dip = DockRoot.DesiredSize.Height;
+        // Measure the content directly: during SourceInitialized the ScrollViewer
+        // may still have a stale, single-row viewport from the initial HWND size.
+        // AppBar manual sizing otherwise keeps that height after WPF wraps items.
+        double width = WrapItems ? ButtonPanel.MaxWidth : double.PositiveInfinity;
+        ButtonPanel.Measure(new Size(width, double.PositiveInfinity));
+        double dip = ButtonPanel.DesiredSize.Height + DockRoot.Padding.Top + DockRoot.Padding.Bottom
+            + DockRoot.BorderThickness.Top + DockRoot.BorderThickness.Bottom;
         if (dip <= 0) dip = AppConfig.Current.BrowserDockButtonSize + 24; // pre-measure fallback
         var src = PresentationSource.FromVisual(this);
         double scale = src?.CompositionTarget?.TransformToDevice.M22 ?? 1.0;
-        return (int)Math.Ceiling(dip * scale);
+        int pixels = (int)Math.Ceiling(dip * scale);
+        MagiDesk.Infrastructure.DiagnosticLog.Write($"DOCK-LAYOUT appbar loaded={IsLoaded} wrap={WrapItems} width={_contentWidth:F0} contentHeight={ButtonPanel.DesiredSize.Height:F0} scale={scale:F2} reservePx={pixels}");
+        return pixels;
     }
 
     // ---------------------------------------------------------- per-monitor placement
@@ -314,6 +446,17 @@ public partial class ProfileDockWindow : Window
     /// its saved per-monitor spot, or center it along the top edge of the
     /// monitor's work area. Clamped to the work area so a stale saved position
     /// (display rearranged / resolution changed) can't strand it off-screen.</summary>
+    internal void PrepareForFirstShow()
+    {
+        if (Mode != DockMode.Floating) return;
+        var handle = new WindowInteropHelper(this).EnsureHandle(); // Creates the HWND without showing it.
+        DockRoot.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+        if (_nativeRounded) FitFloatingContent();
+        else UpdateLayout();
+        PlaceFloating(handle);
+        DiagnosticLog.Write($"DOCK-POS prepared-before-show monitor={MonitorId} positioned={_positionRestored} visible={NativeMethods.IsWindowVisible(handle)}");
+    }
+
     internal void RestoreFloatingPosition()
     {
         if (Mode != DockMode.Floating || _positionRestored) return;
@@ -339,8 +482,19 @@ public partial class ProfileDockWindow : Window
         double hDip = ActualHeight > 0 ? ActualHeight : DockRoot.DesiredSize.Height;
         int wpx = (int)Math.Ceiling(wDip * sx);
         int hpx = (int)Math.Ceiling(hDip * sy);
+        // Before Show(), WPF ActualWidth/Height may still describe the initial
+        // layout. The native composition window has already been fitted exactly.
+        if (_nativeRounded && NativeMethods.GetWindowRect(h, out var fitted))
+        {
+            wpx = fitted.Width;
+            hpx = fitted.Height;
+        }
 
-        var point = DockPositionMemory.Clamp(SavedPositionPx, wa, wpx, hpx, sy);
+        var cfg = AppConfig.Current;
+        var point = cfg.DockFloatingEdge is 1 or 2
+            ? DockFloatingLayout.Anchor(wa, wpx, hpx, cfg.DockFloatingEdge, cfg.DockFloatingAlignment,
+                (int)Math.Round(Math.Clamp(cfg.DockFloatingGap, 0, 48) * sy))
+            : DockPositionMemory.Clamp(SavedPositionPx, wa, wpx, hpx, sy);
         bool placed = NativeMethods.SetWindowPos(h, IntPtr.Zero, point.X, point.Y, 0, 0,
             SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
         _positionRestored = placed;
@@ -369,6 +523,7 @@ public partial class ProfileDockWindow : Window
         if (fullscreen == _fullscreenDemoted) return;
         _fullscreenDemoted = fullscreen;
         ApplyFullscreenZOrder(h, fullscreen);
+        QueueFloatingRefresh();
         MagiDesk.Infrastructure.DiagnosticLog.Write(
             $"DOCK-ZORDER fullscreen={fullscreen} monitor={MonitorId}");
     }
@@ -394,83 +549,119 @@ public partial class ProfileDockWindow : Window
     /// <paramref name="separator"/> picks between: Gap (empty space), Line
     /// (thin divider), Label (group name above each group), Bordered
     /// (tinted rounded container per group).</summary>
-    public void SetProfiles(IReadOnlyList<(string? Name, IReadOnlyList<ChromeProfile> Profiles)> groups,
+    public void SetItems(IReadOnlyList<(string? Name, IReadOnlyList<DockItem> Items)> groups,
                             int buttonSize,
                             DockGroupSeparator separator)
     {
-        ButtonPanel.Children.Clear();
-        _indicators.Clear();
-        _buttonWrappers.Clear();
+        _sizeRefreshItems = groups;
+        int buildsBefore = _itemViewBuildCount;
+        buttonSize = ConfigureOverflow(groups.Sum(g => g.Items.Count), groups.Count, buttonSize, separator);
         var cfg = AppConfig.Current;
+        _menuSnapshot = System.Text.Json.JsonSerializer.Serialize(new { cfg.BrowserDockGroups, cfg.DockNavigationGroups, cfg.ActiveDockCollectionId });
+        var desired = new List<FrameworkElement>();
+        var usedGroups = new HashSet<FrameworkElement>();
 
         bool first = true;
         foreach (var (name, members) in groups)
         {
             if (members.Count == 0) continue;
-            if (!first) AddSeparator(separator);
+            if (!first) desired.Add(MakeSeparator(separator));
             first = false;
 
-            var groupContainer = BuildGroupContainer(name, members, buttonSize, separator, cfg);
-            ButtonPanel.Children.Add(groupContainer);
+            int chunkSize = WrapItems ? Math.Max(1, (int)((ButtonPanel.MaxWidth - 10) / (buttonSize + 14 * _iconSpacingScale))) : members.Count;
+            foreach (var chunk in members.Chunk(chunkSize))
+            {
+                var groupContainer = GetGroupView(name, chunk, buttonSize, separator, cfg);
+                desired.Add(groupContainer);
+                usedGroups.Add(groupContainer);
+            }
         }
+        foreach (var old in ButtonPanel.Children.Cast<FrameworkElement>().Where(c => !desired.Contains(c)).ToArray())
+            ButtonPanel.Children.Remove(old);
+        for (int i = 0; i < desired.Count; i++)
+        {
+            if (i < ButtonPanel.Children.Count && ReferenceEquals(ButtonPanel.Children[i], desired[i])) continue;
+            ButtonPanel.Children.Remove(desired[i]);
+            ButtonPanel.Children.Insert(i, desired[i]);
+        }
+        RemoveUnusedViews(groups.SelectMany(g => g.Items).Select(i => i.Key).ToHashSet(), usedGroups);
+        DiagnosticLog.Write($"DOCK-REFRESH items={_itemViews.Count} newControls={_itemViewBuildCount - buildsBefore} size={buttonSize} groups={usedGroups.Count}");
 
         // Picks up a changed BrowserDockTheme (the service rebuilds on config save).
         ApplyTheme();
         ApplyButtonAlignment();
+        if (_lastStates is not null) UpdateStates(_lastStates);
 
         // Button size / group layout may have changed the strip height — re-reserve.
         if (_appBarMode) RepositionAppBar();
+        else
+        {
+            FitFloatingContent();
+            // ScrollViewer can update its extent in a subsequent layout pass.
+            QueueContentFit();
+        }
     }
 
-    private void AddSeparator(DockGroupSeparator style)
+    private FrameworkElement MakeSeparator(DockGroupSeparator style)
     {
         switch (style)
         {
             case DockGroupSeparator.Gap:
-                ButtonPanel.Children.Add(new Border { Width = 14 });
-                break;
+                return new Border { Width = 14 * _iconSpacingScale };
             case DockGroupSeparator.Line:
-                var line = new Border { Width = 1, Margin = new Thickness(8, 6, 8, 6) };
+                var line = new Border { Width = 1, Margin = new Thickness(8 * _iconSpacingScale, 6, 8 * _iconSpacingScale, 6) };
                 line.SetResourceReference(Border.BackgroundProperty, "DockSeparatorBrush");
-                ButtonPanel.Children.Add(line);
-                break;
+                return line;
             case DockGroupSeparator.Label:
             case DockGroupSeparator.Bordered:
                 // Both visually communicate group boundaries via the group
                 // container itself (label text / border); between groups just
                 // need a small gap to breathe.
-                ButtonPanel.Children.Add(new Border { Width = 8 });
-                break;
+                return new Border { Width = 8 * _iconSpacingScale };
         }
+        return new Border();
     }
 
     private FrameworkElement BuildGroupContainer(
-        string? groupName, IReadOnlyList<ChromeProfile> members,
+        string? groupName, IReadOnlyList<DockItem> members,
         int buttonSize, DockGroupSeparator separator, AppConfig cfg)
     {
         // Horizontal row of profile buttons — shared by all separator styles.
         var row = new StackPanel { Orientation = Orientation.Horizontal };
-        foreach (var p in members)
+        foreach (var item in members)
         {
-            var settings = cfg.BrowserProfiles.TryGetValue(p.Key, out var s)
-                ? s : new BrowserProfileSettings();
-            row.Children.Add(BuildProfileButton(p, settings, buttonSize));
+            var button = GetItemView(item, buttonSize, cfg);
+            if (button.Parent is Panel previous) previous.Children.Remove(button);
+            row.Children.Add(button);
         }
 
         // Wrap according to style.
         if (separator == DockGroupSeparator.Label && !string.IsNullOrEmpty(groupName))
         {
-            // Name text + buttons, wrapped in a subtle rounded border so the
-            // label is clearly tied to its group rather than floating.
-            var stack = new StackPanel { Orientation = Orientation.Vertical };
+            // Keep glyphs upright and stack text elements (including emoji) vertically.
+            var characters = new List<string>();
+            var elements = System.Globalization.StringInfo.GetTextElementEnumerator(groupName);
+            while (elements.MoveNext()) characters.Add(elements.GetTextElement());
+            row.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+            const double labelLineHeight = 12;
+            int visibleLines = Math.Clamp((int)(row.DesiredSize.Height / labelLineHeight), 1, 3);
+            if (characters.Count > visibleLines)
+                characters = characters.Take(visibleLines - 1).Append("…").ToList();
+            var stack = new StackPanel { Orientation = Orientation.Horizontal };
             var label = new TextBlock
             {
-                Text = groupName,
+                Text = string.Join("\n", characters),
+                ToolTip = groupName,
                 FontSize = 10,
+                LineHeight = labelLineHeight,
+                LineStackingStrategy = LineStackingStrategy.BlockLineHeight,
+                MaxHeight = row.DesiredSize.Height,
+                ClipToBounds = true,
                 FontWeight = FontWeights.SemiBold,
                 Opacity = 0.75,
-                HorizontalAlignment = HorizontalAlignment.Center,
-                Margin = new Thickness(0, 0, 0, 2),
+                TextAlignment = TextAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 0, 6 * _iconSpacingScale, 0),
             };
             label.SetResourceReference(TextBlock.ForegroundProperty, "DockTextBrush");
             stack.Children.Add(label);
@@ -546,14 +737,14 @@ public partial class ProfileDockWindow : Window
 
     private IReadOnlyDictionary<string, (bool HasWindows, bool IsForeground)>? _lastStates;
 
-    private Button BuildProfileButton(ChromeProfile p, BrowserProfileSettings s, int size)
+    private Button BuildProfileButton(ChromeProfile p, BrowserProfileSettings s, int size, bool runningOnly = false)
     {
         // Avatar visual — reuses the badge's rendering so dock icons match
         // whatever the user customised in the profile editor.
         var host = new Border
         {
-            Width  = size,
-            Height = size,
+            Width  = 72,
+            Height = 72,
             ClipToBounds = true,
             HorizontalAlignment = HorizontalAlignment.Center,
         };
@@ -566,9 +757,18 @@ public partial class ProfileDockWindow : Window
         };
         var innerGrid = new Grid();
         innerGrid.Children.Add(overlayCanvas);
-        innerGrid.Children.Add(text);
+        innerGrid.Children.Add(new Viewbox { StretchDirection = StretchDirection.DownOnly, Margin = new Thickness(2), Child = text });
         host.Child = innerGrid;
-        ApplyAvatarVisual(host, text, overlayCanvas, p, s, size);
+        ApplyAvatarVisual(host, text, overlayCanvas, p, s, 72);
+
+        var button = BuildItemButton(new DockItem(p) { RunningOnly = runningOnly }, host, size,
+            $"{p.Name} · {p.Browser.DisplayName}", BuildProfileContextMenu(p, s));
+        AttachDragDrop(button, p.Key);
+        return button;
+    }
+
+    private Button BuildItemButton(DockItem item, FrameworkElement host, int size, string tooltip, ContextMenu menu)
+    {
 
         // Taskbar-style state indicator pinned beneath the avatar. Fixed
         // height (4px) even when hidden — the Rectangle always reserves its
@@ -587,10 +787,11 @@ public partial class ProfileDockWindow : Window
             // Active pill length, tracking icon size within taskbar-ish bounds.
             Tag        = Math.Clamp(size * 0.5, 12.0, 18.0),
         };
-        _indicators[p.Key] = indicator;
+        _indicators[item.Key] = indicator;
 
         var stack = new StackPanel { Orientation = Orientation.Vertical };
-        stack.Children.Add(host);
+        var avatar = new Viewbox { Child = host, Width = size, Height = size, Stretch = Stretch.Uniform };
+        stack.Children.Add(avatar);
         stack.Children.Add(indicator);
 
         // Inner wrapper Border: background tinted when this profile is the
@@ -599,26 +800,103 @@ public partial class ProfileDockWindow : Window
         var wrapper = new Border
         {
             CornerRadius = new CornerRadius(5),
-            Padding      = new Thickness(5, 4, 5, 3),
+            Padding      = new Thickness(5 * _iconSpacingScale, 4 * _iconSpacingScale, 5 * _iconSpacingScale, 3 * _iconSpacingScale),
             Background   = System.Windows.Media.Brushes.Transparent,
             Child        = stack,
         };
-        _buttonWrappers[p.Key] = wrapper;
+        _buttonWrappers[item.Key] = wrapper;
 
         var btn = new Button
         {
             Style   = (Style)FindResource("DockButtonStyle"),
             Content = wrapper,
-            Margin  = new Thickness(2, 0, 2, 0),
+            Margin  = new Thickness(2 * _iconSpacingScale, 0, 2 * _iconSpacingScale, 0),
             Cursor  = Cursors.Hand,
-            ToolTip = $"{p.Name} · {p.Browser.DisplayName}",
-            ContextMenu = BuildProfileContextMenu(p, s),
+            ToolTip = tooltip,
+            ContextMenu = menu,
             AllowDrop = true,
         };
-        btn.Click += (_, _) => ProfileClicked?.Invoke(p, btn);
-        AttachDragDrop(btn, p.Key);
+        btn.Click += (_, _) =>
+        {
+            if (App.ProfileDock?.PreviewWindows(item).Count > 1 && ShowItemPreview(btn, item)) return;
+            ClosePreview();
+            ItemClicked?.Invoke(item, btn);
+        };
+        AttachPreviewAndMiddleClick(btn, item);
+        menu.Opened += (_, _) => HoldFloating(true);
+        menu.Closed += (_, _) => HoldFloating(false);
+        _resizeItems[item.Key] = nextSize =>
+        {
+            avatar.Width = avatar.Height = nextSize;
+            wrapper.Padding = new Thickness(5 * _iconSpacingScale, 4 * _iconSpacingScale, 5 * _iconSpacingScale, 3 * _iconSpacingScale);
+            btn.Margin = new Thickness(2 * _iconSpacingScale, 0, 2 * _iconSpacingScale, 0);
+            indicator.Tag = Math.Clamp(nextSize * 0.5, 12.0, 18.0);
+        };
         return btn;
     }
+
+    private Button BuildApplicationButton(DockItem item, int size)
+    {
+        int displaySize = size;
+        size = 72; // Decode once at the largest supported DIP size; retain source across layout changes.
+        var app = item.Application!;
+        var image = new Image { Stretch = Stretch.Uniform, Width = size, Height = size };
+        var fallback = new TextBlock { Text = "▣", FontSize = size * 0.7,
+            HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
+        fallback.SetResourceReference(TextBlock.ForegroundProperty, "DockTextBrush");
+        var host = new Grid { Width = size, Height = size };
+        host.Children.Add(fallback);
+        host.Children.Add(image);
+        var menu = BuildApplicationContextMenu(item);
+        var button = BuildItemButton(item, host, displaySize, app.Name, menu);
+        var dpi = VisualTreeHelper.GetDpi(this);
+        LoadApplicationIcon();
+        async void LoadApplicationIcon()
+        {
+            if (app.IconStyle is { } style)
+            {
+                var primary = ParseHex(style.AvatarBgHex) ?? BadgeWindow.DefaultAvatarBg;
+                var border = new Border { Width = size, Height = size, ClipToBounds = true,
+                    Background = BadgeWindow.BuildAvatarBrush(primary, style) };
+                bool edgeToEdge = style.AvatarShape is AvatarShape.Rectangle or AvatarShape.Square;
+                if (edgeToEdge) border.CornerRadius = new CornerRadius(style.AvatarShape == AvatarShape.Square ? 0 : 2);
+                else BadgeWindow.ApplyInsetShape(border, style.AvatarShape, size);
+                var canvas = new Canvas { IsHitTestVisible = false };
+                var content = new Grid();
+                content.Children.Add(canvas);
+                string label = string.IsNullOrWhiteSpace(style.AvatarText) ? app.Name : style.AvatarText;
+                var elements = System.Globalization.StringInfo.GetTextElementEnumerator(label);
+                string glyph = "";
+                int limit = string.IsNullOrWhiteSpace(style.AvatarText) ? 1 : int.MaxValue;
+                for (int i = 0; i < limit && elements.MoveNext(); i++) glyph += elements.GetTextElement();
+                content.Children.Add(new Viewbox { StretchDirection = StretchDirection.DownOnly, Margin = new Thickness(2), Child = new TextBlock { Text = glyph.Length == 0 ? "?" : glyph,
+                    FontSize = size * 0.5, FontWeight = FontWeights.SemiBold,
+                    HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center,
+                    Foreground = new SolidColorBrush(ParseHex(style.AvatarTextColorHex) ??
+                        (Luminance(primary) > 0.6 ? Colors.Black : Colors.White)) } });
+                border.Child = content;
+                BadgeWindow.RenderOverlay(canvas, style, primary, size, edgeToEdge);
+                host.Children.Clear();
+                host.Children.Add(border);
+                return;
+            }
+            var custom = await DockApplicationIcons.LoadAsync(app.IconPath);
+            if (custom is not null)
+            {
+                image.Source = custom;
+                fallback.Visibility = Visibility.Collapsed;
+                return;
+            }
+            MagiDesk.Features.DesktopFences.ThumbnailLoader.Request(app.LaunchPath, Dispatcher, source =>
+            {
+                image.Source = source;
+                fallback.Visibility = Visibility.Collapsed;
+            }, pixelSize: (int)Math.Ceiling(size * Math.Max(dpi.DpiScaleX, dpi.DpiScaleY)));
+        }
+        if (!item.RunningOnly) AttachDragDrop(button, item.Key);
+        return button;
+    }
+
 
     /// <summary>Wire WPF drag-drop on a profile button so the user can
     /// reorder profiles by dragging directly on the dock. Drop position
@@ -646,21 +924,23 @@ public partial class ProfileDockWindow : Window
             if (Math.Abs(pos.X - dragOrigin.Value.X) < SystemParameters.MinimumHorizontalDragDistance &&
                 Math.Abs(pos.Y - dragOrigin.Value.Y) < SystemParameters.MinimumVerticalDragDistance) return;
             dragOrigin = null;
-            DragDrop.DoDragDrop(btn, new DataObject("MagiDesk.ProfileDir", sourceDir), DragDropEffects.Move);
+            HoldFloating(true);
+            try { DragDrop.DoDragDrop(btn, new DataObject(DockGroups.DragFormat, sourceDir), DragDropEffects.Move); }
+            finally { HoldFloating(false); }
         };
         btn.PreviewMouseLeftButtonUp += (_, _) => dragOrigin = null;
 
         btn.DragOver += (_, e) =>
         {
-            e.Effects = e.Data.GetDataPresent("MagiDesk.ProfileDir") && !AppConfig.Current.BrowserDockLocked
+            e.Effects = e.Data.GetDataPresent(DockGroups.DragFormat) && !AppConfig.Current.BrowserDockLocked
                       ? DragDropEffects.Move : DragDropEffects.None;
             e.Handled = true;
         };
         btn.Drop += (_, e) =>
         {
             if (AppConfig.Current.BrowserDockLocked) return;
-            if (!e.Data.GetDataPresent("MagiDesk.ProfileDir")) return;
-            var src = (string?)e.Data.GetData("MagiDesk.ProfileDir");
+            if (!e.Data.GetDataPresent(DockGroups.DragFormat)) return;
+            var src = (string?)e.Data.GetData(DockGroups.DragFormat);
             if (string.IsNullOrEmpty(src) || string.Equals(src, sourceDir, StringComparison.OrdinalIgnoreCase)) return;
             var dropPos = e.GetPosition(btn);
             bool insertAfter = dropPos.X > btn.ActualWidth / 2;
@@ -676,50 +956,9 @@ public partial class ProfileDockWindow : Window
     /// <c>ProfileDirs</c> or <see cref="AppConfig.BrowserDockUngroupedOrder"/>.</summary>
     private static void ReorderProfile(string sourceDir, string targetDir, bool insertAfter)
     {
-        var cfg = AppConfig.Current;
-
-        // Where is the target? (null = ungrouped section)
-        var targetGroup = cfg.BrowserDockGroups.FirstOrDefault(
-            g => g.ProfileDirs.Any(d => d.Equals(targetDir, StringComparison.OrdinalIgnoreCase)));
-
-        // Detach source from its current location.
-        foreach (var g in cfg.BrowserDockGroups)
-            g.ProfileDirs.RemoveAll(d => d.Equals(sourceDir, StringComparison.OrdinalIgnoreCase));
-        cfg.BrowserDockUngroupedOrder.RemoveAll(d => d.Equals(sourceDir, StringComparison.OrdinalIgnoreCase));
-
-        if (targetGroup is not null)
-        {
-            int idx = targetGroup.ProfileDirs.FindIndex(d => d.Equals(targetDir, StringComparison.OrdinalIgnoreCase));
-            if (idx < 0) targetGroup.ProfileDirs.Add(sourceDir);
-            else targetGroup.ProfileDirs.Insert(insertAfter ? idx + 1 : idx, sourceDir);
-        }
-        else
-        {
-            // Target is ungrouped. Lazily seed the explicit order from the
-            // current catalog the first time the user reorders, so dropping
-            // before/after a profile that hasn't been touched yet still
-            // produces a stable result.
-            var order = cfg.BrowserDockUngroupedOrder;
-            if (!order.Any(d => d.Equals(targetDir, StringComparison.OrdinalIgnoreCase)))
-            {
-                var allocated = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                foreach (var g in cfg.BrowserDockGroups)
-                    foreach (var d in g.ProfileDirs) allocated.Add(d);
-                foreach (var pp in App.BrowserBadges?.Profiles ?? Enumerable.Empty<ChromeProfile>())
-                {
-                    if (allocated.Contains(pp.Key)) continue;
-                    if (order.Any(d => d.Equals(pp.Key, StringComparison.OrdinalIgnoreCase))) continue;
-                    order.Add(pp.Key);
-                }
-            }
-            int idx = order.FindIndex(d => d.Equals(targetDir, StringComparison.OrdinalIgnoreCase));
-            if (idx < 0) { order.Add(targetDir); idx = order.Count - 1; }
-            order.Insert(insertAfter ? idx + 1 : idx, sourceDir);
-        }
-
-        // Sweep empty groups left behind by the move.
-        cfg.BrowserDockGroups.RemoveAll(g => g.ProfileDirs.Count == 0);
-        cfg.Save();
+        if (DockGroups.Reorder(AppConfig.Current,
+            App.BrowserBadges?.Profiles ?? ChromeProfileCatalog.LoadAll(), sourceDir, targetDir, insertAfter))
+            AppConfig.Current.Save();
     }
 
     /// <summary>Right-click menu on a dock profile button. Actions are local
@@ -730,8 +969,6 @@ public partial class ProfileDockWindow : Window
     {
         var menu = new ContextMenu();
         var cfg = AppConfig.Current;
-        var currentGroup = cfg.BrowserDockGroups.FirstOrDefault(
-            g => g.ProfileDirs.Any(d => d.Equals(p.Key, StringComparison.OrdinalIgnoreCase)));
         bool locked = cfg.BrowserDockLocked;
 
         var lockItem = new MenuItem
@@ -765,7 +1002,7 @@ public partial class ProfileDockWindow : Window
         var edit = new MenuItem { Header = "编辑徽标..." };
         edit.Click += (_, _) =>
         {
-            var dlg = new AvatarTextEditorWindow(p, s) { Owner = null };
+            var dlg = new AvatarTextEditorWindow(p, s, maxTextLength: 0) { Owner = null };
             if (dlg.ShowDialog() == true)
             {
                 AppConfig.Current.BrowserProfiles[p.Key] = s;
@@ -776,40 +1013,7 @@ public partial class ProfileDockWindow : Window
 
         menu.Items.Add(new Separator());
 
-        // Group membership submenu — disabled while the dock is locked.
-        var moveTo = new MenuItem { Header = "移动到分组", IsEnabled = !locked };
-        foreach (var g in cfg.BrowserDockGroups)
-        {
-            var captured = g;
-            var item = new MenuItem
-            {
-                Header     = string.IsNullOrEmpty(g.Name) ? "(未命名)" : g.Name,
-                IsCheckable = true,
-                IsChecked  = ReferenceEquals(currentGroup, g),
-            };
-            item.Click += (_, _) => MoveProfileToGroup(p.Key, captured);
-            moveTo.Items.Add(item);
-        }
-        if (cfg.BrowserDockGroups.Count > 0) moveTo.Items.Add(new Separator());
-        var newGroup = new MenuItem { Header = "新建分组..." };
-        newGroup.Click += (_, _) =>
-        {
-            var name = PromptForText("新建分组", "分组名称：", string.Empty);
-            if (string.IsNullOrWhiteSpace(name)) return;
-            var grp = new BrowserDockGroup { Name = name.Trim() };
-            AppConfig.Current.BrowserDockGroups.Add(grp);
-            MoveProfileToGroup(p.Key, grp);
-        };
-        moveTo.Items.Add(newGroup);
-        menu.Items.Add(moveTo);
-
-        var removeFromGroup = new MenuItem
-        {
-            Header   = "从分组中移除",
-            IsEnabled = currentGroup is not null && !locked,
-        };
-        removeFromGroup.Click += (_, _) => RemoveProfileFromAllGroups(p.Key);
-        menu.Items.Add(removeFromGroup);
+        AddGroupMenu(menu, p.Key);
 
         menu.Items.Add(new Separator());
 
@@ -830,32 +1034,71 @@ public partial class ProfileDockWindow : Window
         return menu;
     }
 
-    /// <summary>Move <paramref name="profileDir"/> into <paramref name="target"/>,
-    /// removing it from any other group it currently belongs to. Saves config
-    /// (triggers dock rebuild via <see cref="AppConfig.Changed"/>).</summary>
-    private static void MoveProfileToGroup(string profileKey, BrowserDockGroup target)
+    /// <summary>Shared group commands for fixed applications and browser accounts.</summary>
+    private static void AddGroupMenu(ContextMenu menu, string key, DockApplication? runningApplication = null,
+        bool includeRemove = true)
     {
         var cfg = AppConfig.Current;
-        foreach (var g in cfg.BrowserDockGroups)
-            g.ProfileDirs.RemoveAll(d => d.Equals(profileKey, StringComparison.OrdinalIgnoreCase));
-        if (!target.ProfileDirs.Any(d => d.Equals(profileKey, StringComparison.OrdinalIgnoreCase)))
-            target.ProfileDirs.Add(profileKey);
-        cfg.Save();
+        bool locked = cfg.BrowserDockLocked;
+        var groups = DockCollections.Groups(cfg);
+        var currentGroup = groups.FirstOrDefault(g =>
+            g.ProfileDirs.Contains(key, StringComparer.OrdinalIgnoreCase));
+        // Group membership submenu — disabled while the dock is locked.
+        var moveTo = new MenuItem { Header = runningApplication is null ? "移动到栏目" : "固定到栏目", IsEnabled = !locked };
+        void MoveTo(BrowserDockGroup target)
+        {
+            if (runningApplication is null) MoveProfileToGroup(key, target);
+            else if (DockGroups.PinRunningApplication(cfg, runningApplication, target)) cfg.Save();
+        }
+        foreach (var g in groups)
+        {
+            var captured = g;
+            var item = new MenuItem
+            {
+                Header     = string.IsNullOrEmpty(g.Name) ? "(未命名)" : g.Name,
+                IsCheckable = true,
+                IsChecked  = ReferenceEquals(currentGroup, g),
+            };
+            item.Click += (_, _) => MoveTo(captured);
+            moveTo.Items.Add(item);
+        }
+        if (groups.Count > 0) moveTo.Items.Add(new Separator());
+        var newGroup = new MenuItem { Header = "新建栏目..." };
+        newGroup.Click += (_, _) =>
+        {
+            var name = PromptForText("新建栏目", "栏目名称：", string.Empty);
+            if (string.IsNullOrWhiteSpace(name)) return;
+            var grp = new BrowserDockGroup { Name = name.Trim() };
+            groups.Add(grp);
+            MoveTo(grp);
+        };
+        moveTo.Items.Add(newGroup);
+        menu.Items.Add(moveTo);
+
+        if (runningApplication is not null || !includeRemove) return;
+
+        var removeFromGroup = new MenuItem
+        {
+            Header   = "从当前集合移除",
+            IsEnabled = currentGroup is not null && !locked,
+        };
+        removeFromGroup.Click += (_, _) => RemoveProfileFromAllGroups(key);
+        menu.Items.Add(removeFromGroup);
+    }
+
+    private static void MoveProfileToGroup(string profileKey, BrowserDockGroup target)
+    {
+        if (DockGroups.MoveInto(AppConfig.Current, profileKey, target)) AppConfig.Current.Save();
     }
 
     private static void RemoveProfileFromAllGroups(string profileKey)
     {
-        var cfg = AppConfig.Current;
-        foreach (var g in cfg.BrowserDockGroups)
-            g.ProfileDirs.RemoveAll(d => d.Equals(profileKey, StringComparison.OrdinalIgnoreCase));
-        // Drop now-empty groups so the BrowserBadges settings page doesn't
-        // accumulate stale entries — same cleanup the settings UI does.
-        cfg.BrowserDockGroups.RemoveAll(g => g.ProfileDirs.Count == 0);
-        cfg.Save();
+        DockGroups.Detach(AppConfig.Current, profileKey);
+        AppConfig.Current.Save();
     }
 
     /// <summary>Tiny inline modal: TextBox + OK/Cancel. Returns null on cancel
-    /// or empty input. Used for "新建分组" — too small to justify its own
+    /// or empty input. Used for "新建栏目" — too small to justify its own
     /// xaml file, and avoids pulling in Microsoft.VisualBasic.</summary>
     private static string? PromptForText(string title, string prompt, string defaultValue)
     {
@@ -883,6 +1126,7 @@ public partial class ProfileDockWindow : Window
         string? result = null;
         okBtn.Click += (_, _) => { result = input.Text; dlg.DialogResult = true; };
         input.Loaded += (_, _) => { input.Focus(); input.SelectAll(); };
+        MagiDesk.Native.AuxiliaryWindow.Attach(dlg);
         return dlg.ShowDialog() == true ? result : null;
     }
 
@@ -931,6 +1175,7 @@ public partial class ProfileDockWindow : Window
         // AvatarBgHex, then the Chrome profile highlight color, then the
         // built-in yellow. Matches BadgeWindow exactly.
         var primary = ParseHex(s.AvatarBgHex)
+                      ?? ParseHex(s.ThemeColorHex)
                       ?? (p.ThemeColorRgb is int themeRgb
                           ? Color.FromRgb((byte)((themeRgb >> 16) & 0xFF), (byte)((themeRgb >> 8) & 0xFF), (byte)(themeRgb & 0xFF))
                           : BadgeWindow.DefaultAvatarBg);
@@ -940,7 +1185,7 @@ public partial class ProfileDockWindow : Window
             var fg = ParseHex(s.AvatarTextColorHex)
                      ?? (Luminance(primary) > 0.6 ? Colors.Black : Colors.White);
             text.Foreground = new SolidColorBrush(fg);
-            text.Text = s.AvatarText!.Length > 3 ? s.AvatarText![..3] : s.AvatarText!;
+            text.Text = s.AvatarText!;
             BadgeWindow.RenderOverlay(overlay, s, primary, size, edgeToEdge);
             return;
         }
@@ -968,7 +1213,7 @@ public partial class ProfileDockWindow : Window
     private void Dock_MouseDown(object sender, MouseButtonEventArgs e)
     {
         // Taskbar-style appbar is pinned by the shell — never drag-move it.
-        if (_appBarMode) return;
+        if (_appBarMode || AppConfig.Current.DockFloatingEdge != 0) return;
         // Don't hijack clicks on child buttons.
         if (e.OriginalSource is not Border) return;
         var hwnd = new WindowInteropHelper(this).Handle;
@@ -978,6 +1223,8 @@ public partial class ProfileDockWindow : Window
         _dragStartWinX = wr.Left;
         _dragStartWinY = wr.Top;
         _dragging = true;
+        CancelFloatingHide();
+        UpdateRevealHint();
         MagiDesk.Infrastructure.DiagnosticLog.Write($"DOCK-POS drag-start x={wr.Left} y={wr.Top}\n");
         DockRoot.CaptureMouse();
         e.Handled = true;
@@ -995,6 +1242,7 @@ public partial class ProfileDockWindow : Window
         NativeMethods.SetWindowPos(hwnd, IntPtr.Zero,
             _dragStartWinX + dx, _dragStartWinY + dy, 0, 0,
             SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOSIZE);
+        UpdateFloatingMonitor(hwnd);
     }
 
     private void Dock_MouseUp(object sender, MouseButtonEventArgs e)
@@ -1010,11 +1258,12 @@ public partial class ProfileDockWindow : Window
         if (!_dragging) return;
         _dragging = false;
         SaveFloatingPosition();
+        RefreshFloating();
     }
 
     private void SaveFloatingPosition()
     {
-        if (_appBarMode) return;
+        if (_appBarMode || AppConfig.Current.DockFloatingEdge != 0) return;
         var hwnd = new WindowInteropHelper(this).Handle;
         if (hwnd == IntPtr.Zero || !NativeMethods.GetWindowRect(hwnd, out var wr)) return;
         var point = new DockPoint { X = wr.Left, Y = wr.Top };

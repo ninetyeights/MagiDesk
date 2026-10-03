@@ -33,11 +33,31 @@
                            PaneDisplayMode="Left"
                            OpenPaneLength="220"
                            IsBackButtonVisible="Collapsed"
-                           IsPaneToggleVisible="True"
+                           IsPaneToggleVisible="False"
+                           IsPaneOpen="True"
                            Background="Transparent"
                            Padding="0"
                            BorderThickness="0">
             <ui:NavigationView.Resources>
+                <!-- Base Control/FrameworkElement styles do not apply implicitly to
+                     derived types. Suppress only navigation/page focus adorners;
+                     controls inside pages keep their own keyboard focus feedback. -->
+                <Style TargetType="{x:Type ui:NavigationViewItem}"
+                       BasedOn="{StaticResource NavigationViewItemDefaultStyle}">
+                    <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+                </Style>
+                <Style x:Key="NavigationPageStyle" TargetType="{x:Type Page}">
+                    <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+                </Style>
+                <Style TargetType="{x:Type pages:WindowDragPage}" BasedOn="{StaticResource NavigationPageStyle}"/>
+                <Style TargetType="{x:Type pages:ZonesPage}" BasedOn="{StaticResource NavigationPageStyle}"/>
+                <Style TargetType="{x:Type pages:QuickGridPage}" BasedOn="{StaticResource NavigationPageStyle}"/>
+                <Style TargetType="{x:Type pages:DesktopFencesPage}" BasedOn="{StaticResource NavigationPageStyle}"/>
+                <Style TargetType="{x:Type pages:BrowserBadgesPage}" BasedOn="{StaticResource NavigationPageStyle}"/>
+                <Style TargetType="{x:Type pages:BrowserLaunchPage}" BasedOn="{StaticResource NavigationPageStyle}"/>
+                <Style TargetType="{x:Type pages:ProfileDockPage}" BasedOn="{StaticResource NavigationPageStyle}"/>
+                <Style TargetType="{x:Type pages:SettingsPage}" BasedOn="{StaticResource NavigationPageStyle}"/>
+                <Style TargetType="{x:Type pages:AboutPage}" BasedOn="{StaticResource NavigationPageStyle}"/>
                 <!-- Transparent backgrounds so Mica shows through uniformly. -->
                 <SolidColorBrush x:Key="NavigationViewContentBackground"       Color="Transparent"/>
                 <SolidColorBrush x:Key="NavigationViewContentGridBackground"   Color="Transparent"/>
@@ -58,59 +78,64 @@
             </ui:NavigationView.Resources>
 
             <ui:NavigationView.MenuItems>
-                <ui:NavigationViewItem Content="窗口拖动"
+                <ui:NavigationViewItem FocusVisualStyle="{x:Null}" Content="窗口拖动"
                                        TargetPageType="{x:Type pages:WindowDragPage}">
                     <ui:NavigationViewItem.Icon>
                         <ui:SymbolIcon Symbol="Cursor24"/>
                     </ui:NavigationViewItem.Icon>
                 </ui:NavigationViewItem>
-                <ui:NavigationViewItem Content="窗口分区"
+                <ui:NavigationViewItem FocusVisualStyle="{x:Null}" Content="窗口分区"
                                        TargetPageType="{x:Type pages:ZonesPage}">
                     <ui:NavigationViewItem.Icon>
                         <ui:SymbolIcon Symbol="Grid24"/>
                     </ui:NavigationViewItem.Icon>
                 </ui:NavigationViewItem>
-                <ui:NavigationViewItem Content="快速网格"
+                <ui:NavigationViewItem FocusVisualStyle="{x:Null}" Content="快速网格"
                                        TargetPageType="{x:Type pages:QuickGridPage}">
                     <ui:NavigationViewItem.Icon>
                         <ui:SymbolIcon Symbol="AppsListDetail24"/>
                     </ui:NavigationViewItem.Icon>
                 </ui:NavigationViewItem>
-                <ui:NavigationViewItem Content="桌面盒子"
+                <ui:NavigationViewItem FocusVisualStyle="{x:Null}" Content="桌面盒子"
                                        TargetPageType="{x:Type pages:DesktopFencesPage}">
                     <ui:NavigationViewItem.Icon>
                         <ui:SymbolIcon Symbol="BorderAll24"/>
                     </ui:NavigationViewItem.Icon>
                 </ui:NavigationViewItem>
-                <ui:NavigationViewItem Content="浏览器">
+                <ui:NavigationViewItem FocusVisualStyle="{x:Null}" Content="Dock">
+                    <ui:NavigationViewItem.Icon>
+                        <ui:SymbolIcon Symbol="AppsListDetail24"/>
+                    </ui:NavigationViewItem.Icon>
+                    <ui:NavigationViewItem.MenuItems>
+                        <ui:NavigationViewItem FocusVisualStyle="{x:Null}" Content="项目库" TargetPageType="{x:Type pages:DockLibraryPage}"/>
+                        <ui:NavigationViewItem FocusVisualStyle="{x:Null}" Content="内容管理" TargetPageType="{x:Type pages:DockContentPage}"/>
+                        <ui:NavigationViewItem FocusVisualStyle="{x:Null}" Content="Dock 设置" TargetPageType="{x:Type pages:ProfileDockPage}"/>
+                    </ui:NavigationViewItem.MenuItems>
+                </ui:NavigationViewItem>
+                <ui:NavigationViewItem FocusVisualStyle="{x:Null}" Content="浏览器">
                     <ui:NavigationViewItem.Icon>
                         <ui:SymbolIcon Symbol="Person24"/>
                     </ui:NavigationViewItem.Icon>
                     <ui:NavigationViewItem.MenuItems>
-                        <ui:NavigationViewItem Content="徽标"
+                        <ui:NavigationViewItem FocusVisualStyle="{x:Null}" Content="徽标"
                                                TargetPageType="{x:Type pages:BrowserBadgesPage}">
                             <ui:NavigationViewItem.Icon>
                                 <ui:SymbolIcon Symbol="Person24"/>
                             </ui:NavigationViewItem.Icon>
                         </ui:NavigationViewItem>
-                        <ui:NavigationViewItem Content="Profile Dock"
-                                               TargetPageType="{x:Type pages:ProfileDockPage}">
-                            <ui:NavigationViewItem.Icon>
-                                <ui:SymbolIcon Symbol="AppsListDetail24"/>
-                            </ui:NavigationViewItem.Icon>
-                        </ui:NavigationViewItem>
+                        <ui:NavigationViewItem FocusVisualStyle="{x:Null}" Content="启动参数" TargetPageType="{x:Type pages:BrowserLaunchPage}"/>
                     </ui:NavigationViewItem.MenuItems>
                 </ui:NavigationViewItem>
             </ui:NavigationView.MenuItems>
 
             <ui:NavigationView.FooterMenuItems>
-                <ui:NavigationViewItem Content="设置"
+                <ui:NavigationViewItem FocusVisualStyle="{x:Null}" Content="设置"
                                        TargetPageType="{x:Type pages:SettingsPage}">
                     <ui:NavigationViewItem.Icon>
                         <ui:SymbolIcon Symbol="Settings24"/>
                     </ui:NavigationViewItem.Icon>
                 </ui:NavigationViewItem>
-                <ui:NavigationViewItem Content="关于"
+                <ui:NavigationViewItem FocusVisualStyle="{x:Null}" Content="关于"
                                        TargetPageType="{x:Type pages:AboutPage}">
                     <ui:NavigationViewItem.Icon>
                         <ui:SymbolIcon Symbol="Info24"/>

@@ -1,3 +1,7 @@
+> Release preparation: **0.1.0-beta.1**. See [release and recovery guide](docs/RELEASE.md) (Chinese), [changelog](CHANGELOG.md), and the [current Chinese feature guide](README.zh-CN.md). The self-contained ZIP requires no separate .NET installation. Only window dragging is enabled on first launch.
+>
+> Dock now manages applications and browser profiles through collections and sections. Browser launch parameters have a separate page. Desktop boxes include a unified desktop mode with a recovery helper. See the current guide for these newer features.
+
 # MagiDesk
 
 **English** | [中文](README.zh-CN.md)
@@ -27,8 +31,8 @@ Window Drag page.)
 
 ### ▦ Zones (FancyZones-style)
 Hold **Shift** while dragging to snap a window into a zone. A tree-based layout
-editor lets you split / merge / delete zones and drag dividers (a full grid line
-moves together). Supports multiple named layouts, per-monitor assignment,
+editor lets you split / merge / delete zones and drag dividers, with local and
+global cuts and conversion between them. Supports multiple named layouts, per-monitor assignment,
 built-in templates, and edge-band merging of adjacent zones.
 
 ### ⊞ Quick Grid
@@ -41,11 +45,20 @@ Floating per-profile avatar badges that follow each browser window, so you can
 tell your many profiles apart at a glance. Multi-browser: Chrome, Edge, Brave,
 Vivaldi, Opera. Avatars, colors, and visibility are customizable per profile.
 
-### ⌂ Profile Dock
-A taskbar-like floating strip of browser-profile avatars — click to launch,
-focus, or cycle through a profile's windows. Supports named groups, single- or
-all-monitors, and either a free-floating overlay or an AppBar pinned to a screen
-edge (reserving space like the system taskbar).
+### ⌂ Dock
+Mix browser profiles and ordinary applications in collections and sections.
+Content Management edits collections; the Project Library manages available
+items. Includes running applications, window previews, pins, scrolling or
+wrapping, icon sizing, floating placement and taskbar space reservation.
+
+### Desktop Boxes
+Organize desktop files with tabs, mapped folders, thumbnails and temporary
+reveal. Unified desktop mode includes a helper to restore native desktop icon
+visibility. Read the recovery guide before enabling it.
+
+### Browser Launch Parameters
+Open Browser → Launch Parameters in the sidebar. Settings apply to launches
+from Dock; focusing an existing window does not reapply arguments.
 
 ## Extras
 - System tray icon with close-to-tray; single-instance (a second launch surfaces
@@ -57,7 +70,8 @@ edge (reserving space like the system taskbar).
 
 ## Build & Run
 
-Requires the **.NET 10 SDK** and Windows 10/11.
+Development builds require the **.NET 10 SDK** on Windows. See the release guide
+for the tested platform scope; self-contained packages include the runtime.
 
 ```powershell
 dotnet run --project MagiDesk\MagiDesk.csproj
@@ -69,8 +83,8 @@ quit fully.
 ### Tests
 
 ```powershell
-dotnet run --project MagiDesk.Tests            # unit tests (injects real input)
-dotnet run --project MagiDesk.Tests -- --real-world   # drive the real exe
+dotnet run --project MagiDesk.Tests -- --headless # no windows or real desktop changes
+# Interactive --real-world tests manipulate actual windows; schedule separately.
 ```
 
 ## Project layout

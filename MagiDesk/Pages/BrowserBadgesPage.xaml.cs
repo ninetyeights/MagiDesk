@@ -30,7 +30,10 @@ public partial class BrowserBadgesPage : Page
     public BrowserBadgesPage()
     {
         InitializeComponent();
-        BuildLaunchArgumentEditors();
+        PositionBrowser.Items.Add(new ComboBoxItem { Content = "默认位置", Tag = "" });
+        foreach (var browser in BrowserInfo.All)
+            PositionBrowser.Items.Add(new ComboBoxItem { Content = browser.DisplayName, Tag = browser.Id });
+        PositionBrowser.SelectedIndex = 0;
         PullToggles();
         AppConfig.Changed += OnConfigChanged;
         if (App.BrowserBadges is not null)
@@ -41,78 +44,20 @@ public partial class BrowserBadgesPage : Page
             if (App.BrowserBadges is not null)
                 App.BrowserBadges.WindowsChanged -= OnBrowserWindowsChanged;
         };
-        Loaded += (_, _) => RebuildProfileList();
+        Loaded += (_, _) =>
+        {
+            AppConfig.Changed -= OnConfigChanged;
+            AppConfig.Changed += OnConfigChanged;
+            if (App.BrowserBadges is { } badges)
+            {
+                badges.WindowsChanged -= OnBrowserWindowsChanged;
+                badges.WindowsChanged += OnBrowserWindowsChanged;
+            }
+            PullToggles();
+            RebuildProfileList();
+        };
     }
 
-    private void BuildLaunchArgumentEditors()
-    {
-        foreach (var browser in BrowserInfo.All)
-        {
-            var section = new StackPanel { Margin = new Thickness(0, 0, 0, 16) };
-            section.Children.Add(new TextBlock { Text = browser.DisplayName, FontWeight = FontWeights.SemiBold });
-            section.Children.Add(new TextBlock
-            {
-                Text = "适用于该浏览器的所有 profile。预览中的〈点击的 profile〉由实际点击的头像决定。",
-                TextWrapping = TextWrapping.Wrap,
-                Margin = new Thickness(0, 4, 0, 0),
-            });
-            var input = new TextBox
-            {
-                Text = AppConfig.Current.BrowserLaunchArguments.GetValueOrDefault(browser.Id) ?? "",
-                MaxLength = 16000,
-                Margin = new Thickness(0, 6, 0, 6),
-            };
-            section.Children.Add(input);
-            var preview = new TextBox
-            {
-                IsReadOnly = true,
-                TextAlignment = TextAlignment.Left,
-                HorizontalContentAlignment = HorizontalAlignment.Left,
-                TextWrapping = TextWrapping.NoWrap,
-                HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
-                FontFamily = new FontFamily("Consolas"),
-                Margin = new Thickness(0, 6, 0, 6),
-            };
-            section.Children.Add(preview);
-            var status = new TextBlock { TextWrapping = TextWrapping.Wrap };
-            var buttons = new StackPanel { Orientation = Orientation.Horizontal };
-            var save = new Button { Content = "保存", Margin = new Thickness(0, 0, 8, 0) };
-            var clear = new Button { Content = "清空并保存" };
-            buttons.Children.Add(save); buttons.Children.Add(clear);
-            section.Children.Add(buttons); section.Children.Add(status);
-            void UpdatePreview()
-            {
-                try
-                {
-                    var start = MagiDesk.Features.ProfileDock.ChromeLauncher.CreateStartInfo(
-                        browser.FindExe() ?? browser.ExeName, "〈点击的 profile〉", input.Text);
-                    preview.Text = MagiDesk.Features.ProfileDock.ChromeLauncher.FormatCommand(start);
-                    status.Text = string.IsNullOrWhiteSpace(input.Text)
-                        ? "未配置附加参数，实际启动仍优先使用已有 profile 快捷方式；上方为直接启动命令。"
-                        : "以上是待保存的启动命令；未安装的浏览器仅显示程序名称。";
-                    save.IsEnabled = true;
-                }
-                catch (ArgumentException ex) { preview.Text = ""; status.Text = ex.Message; save.IsEnabled = false; }
-            }
-            void Save()
-            {
-                try
-                {
-                    MagiDesk.Native.BrowserCommandLine.Parse(input.Text);
-                    if (string.IsNullOrWhiteSpace(input.Text)) AppConfig.Current.BrowserLaunchArguments.Remove(browser.Id);
-                    else AppConfig.Current.BrowserLaunchArguments[browser.Id] = input.Text;
-                    AppConfig.Current.Save();
-                    status.Text = "已保存，下次通过 MagiDesk 启动时使用。";
-                }
-                catch (ArgumentException ex) { status.Text = ex.Message; }
-            }
-            input.TextChanged += (_, _) => UpdatePreview();
-            save.Click += (_, _) => Save();
-            clear.Click += (_, _) => { input.Text = ""; Save(); };
-            LaunchArgumentsPanel.Children.Add(section);
-            UpdatePreview();
-        }
-    }
 
     /// <summary>Badge service reported a browser window / foreground change.
     /// Repaint just the status dots — cheap, no row rebuild.</summary>
@@ -130,10 +75,25 @@ public partial class BrowserBadgesPage : Page
     {
         _loading = true;
         var cfg = AppConfig.Current;
+        if (cfg.BrowserBadgeUnlocked)
+            PositionBrowser.SelectedItem = PositionBrowser.Items.Cast<ComboBoxItem>()
+                .FirstOrDefault(item => (string)item.Tag == (cfg.BrowserBadgePositionScope ?? ""));
         TsEnabled.IsChecked  = cfg.BrowserBadgeEnabled;
         TsShowName.IsChecked = cfg.BrowserBadgeShowName;
         TsFirstWord.IsChecked = cfg.BrowserBadgeFirstWordOnly;
-        TsUnlocked.IsChecked = cfg.BrowserBadgeUnlocked;
+        BtnAdjustPosition.Content = cfg.BrowserBadgeUnlocked ? "完成调整" : "调整位置";
+        string? positionId = SelectedPositionBrowser;
+        string scopeName = (PositionBrowser.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? "默认位置";
+        PositionBrowser.IsEnabled = !cfg.BrowserBadgeUnlocked;
+        InheritPosition.Visibility = positionId is null ? Visibility.Collapsed : Visibility.Visible;
+        InheritPosition.IsChecked = positionId is not null && !cfg.BrowserBadgePositions.ContainsKey(positionId);
+        InheritPosition.IsEnabled = !cfg.BrowserBadgeUnlocked;
+        BtnResetPos.IsEnabled = !cfg.BrowserBadgeUnlocked;
+        TxtPositionAdjustment.Text = cfg.BrowserBadgeUnlocked
+            ? $"正在调整：{scopeName}。拖动徽标后点击完成或按 Esc 保存并锁定。"
+            : positionId is null
+                ? "拖动任一使用默认位置的徽标，同步所有继承默认位置的浏览器。独立位置不受影响。"
+                : $"拖动只影响 {scopeName} 的所有账号窗口，拖动后自动保存为独立位置。";
         SizeSlider.Value     = cfg.BrowserBadgeHeight;
         TxtSize.Text         = cfg.BrowserBadgeHeight + " px";
         BodyGroup.Opacity    = cfg.BrowserBadgeEnabled ? 1.0 : 0.5;
@@ -173,18 +133,42 @@ public partial class BrowserBadgesPage : Page
         AppConfig.Current.Save();
     }
 
-    private void Unlocked_Changed(object sender, RoutedEventArgs e)
+    private void AdjustPosition_Click(object sender, RoutedEventArgs e)
     {
         if (_loading) return;
-        AppConfig.Current.BrowserBadgeUnlocked = TsUnlocked.IsChecked == true;
-        AppConfig.Current.Save();
+        if (!AppConfig.Current.BrowserBadgeUnlocked)
+            AppConfig.Current.BrowserBadgePositionScope = SelectedPositionBrowser;
+        if (App.BrowserBadges?.SetPositionAdjustment(!AppConfig.Current.BrowserBadgeUnlocked) != true)
+            TxtPositionAdjustment.Text = "无法启用调整：Esc 快捷键可能被其他程序占用，请稍后重试。";
     }
 
     private void ResetPos_Click(object sender, RoutedEventArgs e)
     {
-        AppConfig.Current.BrowserBadgeOffsetRight = 10;
-        AppConfig.Current.BrowserBadgeOffsetTop   = 42;
+        if (SelectedPositionBrowser is { } id)
+            AppConfig.Current.BrowserBadgePositions.Remove(id);
+        else
+        {
+            AppConfig.Current.BrowserBadgeOffsetRight = 10;
+            AppConfig.Current.BrowserBadgeOffsetTop = 42;
+        }
         AppConfig.Current.Save();
+    }
+
+    private string? SelectedPositionBrowser
+        => (PositionBrowser.SelectedItem as ComboBoxItem)?.Tag is string { Length: > 0 } id ? id : null;
+
+    private void PositionBrowser_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (!_loading) PullToggles();
+    }
+
+    private void InheritPosition_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_loading || SelectedPositionBrowser is not { } id) return;
+        var cfg = AppConfig.Current;
+        if (InheritPosition.IsChecked == true) cfg.BrowserBadgePositions.Remove(id);
+        else cfg.BrowserBadgePositions[id] = BrowserBadgePosition.Resolve(cfg, id);
+        cfg.Save();
     }
 
     private void Refresh_Click(object sender, RoutedEventArgs e)
@@ -337,23 +321,36 @@ public partial class BrowserBadgesPage : Page
         var border = new Border
         {
             CornerRadius = new CornerRadius(8),
-            Padding      = new Thickness(14, 10, 14, 10),
-            Margin       = new Thickness(0, 0, 0, 8),
+            Padding      = new Thickness(12, 10, 12, 10),
+            Margin       = new Thickness(0, 0, 0, 3),
         };
-        border.SetResourceReference(Border.BackgroundProperty, "ControlFillColorDefaultBrush");
-        border.SetResourceReference(Border.BorderBrushProperty, "CardStrokeColorDefaultBrush");
-        border.BorderThickness = new Thickness(1);
+        void RefreshRowBackground() => border.SetResourceReference(Border.BackgroundProperty,
+            _selectedBadges.Contains(profile.Key) ? "SubtleFillColorSecondaryBrush"
+            : border.IsMouseOver ? "SubtleFillColorTertiaryBrush" : "SubtleFillColorTransparentBrush");
+        border.MouseEnter += (_, _) => RefreshRowBackground();
+        border.MouseLeave += (_, _) => RefreshRowBackground();
+        RefreshRowBackground();
 
         var row = new Grid();
         border.Child = row;
         row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto, MinWidth = 44 }); // 0 avatar
         row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) }); // 1 names
-        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto }); // 2 badge color
-        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto }); // 3 text avatar editor
-        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto }); // 4 copy-to
-        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto }); // 5 upload
-        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto }); // 6 reset
-        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto }); // 7 visibility
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto }); // 2 appearance
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto }); // 3 more
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto }); // 4 visibility
+        var select = new CheckBox { IsChecked = _selectedBadges.Contains(profile.Key),
+            VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 10, 0),
+            ToolTip = "选择此项进行批量修改" };
+        var selectionRow = new Grid();
+        selectionRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        selectionRow.ColumnDefinitions.Add(new ColumnDefinition());
+        border.Child = null;
+        selectionRow.Children.Add(select);
+        Grid.SetColumn(row, 1);
+        selectionRow.Children.Add(row);
+        border.Child = selectionRow;
+        select.Checked += (_, _) => { _selectedBadges.Add(profile.Key); UpdateBadgeSelectionCount(); RefreshRowBackground(); };
+        select.Unchecked += (_, _) => { _selectedBadges.Remove(profile.Key); UpdateBadgeSelectionCount(); RefreshRowBackground(); };
 
         // Avatar preview — Border with CornerRadius + TextBlock overlay so
         // text avatars show text, images clip to the chosen shape.
@@ -454,15 +451,16 @@ public partial class BrowserBadgesPage : Page
         var names = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(10, 0, 10, 0) };
         Grid.SetColumn(names, 1);
         row.Children.Add(names);
-        names.Children.Add(new TextBlock { Text = profile.Name, FontWeight = FontWeights.SemiBold });
-        var dirText = new TextBlock { Text = $"{profile.Browser.DisplayName} · {profile.Directory}", FontSize = 11 };
+        names.Children.Add(new TextBlock { Text = profile.Name, FontWeight = FontWeights.SemiBold,
+            TextTrimming = TextTrimming.CharacterEllipsis, ToolTip = profile.Name });
+        var dirText = new TextBlock { Text = profile.Directory, FontSize = 11,
+            TextTrimming = TextTrimming.CharacterEllipsis, ToolTip = $"{profile.Browser.DisplayName} · {profile.Directory}" };
         dirText.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorSecondaryBrush");
-        names.Children.Add(dirText);
 
         // Live status row: a colored dot + label showing whether this profile
         // currently has open windows and whether one is the foreground window.
         // RefreshStatuses repaints these without rebuilding the row.
-        var statusRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 4, 0, 0) };
+        var statusRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 5, 0, 0) };
         var statusDot = new Ellipse
         {
             Width = 8, Height = 8,
@@ -472,6 +470,8 @@ public partial class BrowserBadgesPage : Page
         var statusLabel = new TextBlock { FontSize = 11, VerticalAlignment = VerticalAlignment.Center };
         statusRow.Children.Add(statusDot);
         statusRow.Children.Add(statusLabel);
+        statusRow.Children.Add(new TextBlock { Text = "·", Margin = new Thickness(8, 0, 8, 0) });
+        statusRow.Children.Add(dirText);
         names.Children.Add(statusRow);
         _statusByKey[profile.Key] = (statusDot, statusLabel);
         SetStatus(statusDot, statusLabel, hasWin: false, isFg: false);
@@ -479,149 +479,67 @@ public partial class BrowserBadgesPage : Page
         // Color swatch button
         var colorBtn = new Button
         {
-            Width = 36, Height = 36, Padding = new Thickness(0),
+            Content = "编辑微标", Height = 32, Padding = new Thickness(10, 0, 10, 0),
             Margin = new Thickness(0, 0, 8, 0),
             VerticalAlignment = VerticalAlignment.Center,
-            ToolTip = "选择颜色",
+            ToolTip = "编辑主题色、文字、图片和样式",
         };
         Grid.SetColumn(colorBtn, 2);
         row.Children.Add(colorBtn);
-        UpdateColorSwatch(colorBtn, profile, settings);
-        colorBtn.Click += (_, _) =>
-        {
-            var cur = ResolveColor(profile, settings);
-            using var dlg = new WinFormsColorDialog
-            {
-                FullOpen = true,
-                Color = System.Drawing.Color.FromArgb(cur.R, cur.G, cur.B),
-            };
-            if (dlg.ShowDialog() == System.Windows.Forms.DialogResult.OK)
-            {
-                settings.ColorHex = $"#{dlg.Color.R:X2}{dlg.Color.G:X2}{dlg.Color.B:X2}";
-                AppConfig.Current.BrowserProfiles[profile.Key] = settings;
-                AppConfig.Current.Save();
-                UpdateColorSwatch(colorBtn, profile, settings);
-            }
-        };
+        colorBtn.Click += (_, _) => EditTextAvatar();
 
-        // Text-avatar editor (opens modal).
-        var textBtn = new Wpf.Ui.Controls.Button
+        void EditTextAvatar()
         {
-            Content = "文字头像",
-            Padding = new Thickness(12, 4, 12, 4),
-            Margin  = new Thickness(0, 0, 6, 0),
-            VerticalAlignment = VerticalAlignment.Center,
-            ToolTip = "用文字 + 底色作为头像（仅影响图标，不影响徽标底色）",
-        };
-        Grid.SetColumn(textBtn, 3);
-        row.Children.Add(textBtn);
-        textBtn.Click += (_, _) =>
-        {
-            var dlg = new AvatarTextEditorWindow(profile, settings)
-            {
-                Owner = Window.GetWindow(this),
-            };
-            if (dlg.ShowDialog() == true)
-            {
-                AppConfig.Current.BrowserProfiles[profile.Key] = settings;
-                AppConfig.Current.Save();
-                RefreshAvatar();
-            }
-        };
-
-        // Copy avatar settings to another profile (appearance-only —
-        // AvatarText, AvatarBgHex(2), AvatarTextColorHex, shape, gradient
-        // style, overlay, uploaded image. Does NOT copy ColorHex or Visible,
-        // and leaves source untouched).
-        var copyBtn = new Wpf.Ui.Controls.Button
-        {
-            Content = "复制头像",
-            Padding = new Thickness(12, 4, 12, 4),
-            Margin  = new Thickness(0, 0, 6, 0),
-            VerticalAlignment = VerticalAlignment.Center,
-            ToolTip = "把当前 profile 的头像外观复制到另一个 profile",
-        };
-        Grid.SetColumn(copyBtn, 4);
-        row.Children.Add(copyBtn);
-        copyBtn.Click += (s2, e2) =>
-        {
-            var menu = new ContextMenu { Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom, PlacementTarget = copyBtn };
-            var profiles = App.BrowserBadges?.Profiles
-                        ?? Features.BrowserBadges.ChromeProfileCatalog.LoadAll();
-            foreach (var other in profiles)
-            {
-                if (other.Key.Equals(profile.Key, StringComparison.OrdinalIgnoreCase)) continue;
-                var mi = new MenuItem { Header = $"{other.Name} · {other.Browser.DisplayName} ({other.Directory})" };
-                string targetKey = other.Key;
-                mi.Click += (_, _) =>
-                {
-                    CopyAvatarSettings(settings, targetKey);
-                };
-                menu.Items.Add(mi);
-            }
-            if (menu.Items.Count == 0) return;
-            menu.IsOpen = true;
-        };
-
-        // Avatar image (highest priority). Paste from clipboard or pick a file;
-        // dragging an image onto the preview on the left does the same.
-        var uploadBtn = new Wpf.Ui.Controls.Button
-        {
-            Content = "头像图片",
-            Padding = new Thickness(12, 4, 12, 4),
-            Margin  = new Thickness(0, 0, 6, 0),
-            VerticalAlignment = VerticalAlignment.Center,
-            ToolTip = "粘贴剪贴板图片、选择文件，或直接把图片拖到左侧头像上",
-        };
-        Grid.SetColumn(uploadBtn, 5);
-        row.Children.Add(uploadBtn);
-        uploadBtn.Click += (_, _) =>
-        {
-            var menu = new ContextMenu
-            {
-                Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom,
-                PlacementTarget = uploadBtn,
-            };
-            var paste = new MenuItem { Header = "从剪贴板粘贴 (Ctrl+V)" };
-            paste.Click += (_, _) => PasteAvatar();
-            var file = new MenuItem { Header = "从文件选择…" };
-            file.Click += (_, _) => ChooseAvatarFile();
-            menu.Items.Add(paste);
-            menu.Items.Add(file);
-            menu.IsOpen = true;
-        };
-
-        // Reset avatar / color
-        var resetBtn = new Wpf.Ui.Controls.Button
-        {
-            Content = "重置",
-            Padding = new Thickness(12, 4, 12, 4),
-            Margin  = new Thickness(0, 0, 10, 0),
-            VerticalAlignment = VerticalAlignment.Center,
-            ToolTip = "清除自定义颜色和头像",
-        };
-        Grid.SetColumn(resetBtn, 6);
-        row.Children.Add(resetBtn);
-        resetBtn.Click += (_, _) =>
-        {
-            settings.ColorHex = null;
-            settings.CustomAvatarPath = null;
-            settings.AvatarText = null;
-            settings.AvatarBgHex = null;
-            settings.AvatarTextColorHex = null;
+            var dlg = new AvatarTextEditorWindow(profile, settings) { Owner = Window.GetWindow(this) };
+            if (dlg.ShowDialog() != true) return;
             AppConfig.Current.BrowserProfiles[profile.Key] = settings;
             AppConfig.Current.Save();
-            UpdateColorSwatch(colorBtn, profile, settings);
-            RefreshAvatar();
-        };
+        }
 
+        var more = new Wpf.Ui.Controls.Button
+        {
+            Content = "…", Width = 32, Height = 32, Padding = new Thickness(0),
+            Margin = new Thickness(0, 0, 16, 0), VerticalAlignment = VerticalAlignment.Center,
+            ToolTip = "更多操作",
+        };
+        Grid.SetColumn(more, 3);
+        row.Children.Add(more);
+        more.Click += (_, _) =>
+        {
+            var menu = new ContextMenu { PlacementTarget = more };
+            var copy = new MenuItem { Header = "应用头像到其他账号…" };
+            copy.Click += (_, _) => ShowCopyAvatarDialog(profile, settings);
+            menu.Items.Add(copy);
+            var clear = new MenuItem { Header = "清除头像图片", IsEnabled = !string.IsNullOrEmpty(settings.CustomAvatarPath) };
+            clear.Click += (_, _) => ClearAvatarImage();
+            menu.Items.Add(clear);
+            menu.Items.Add(new Separator());
+            var reset = new MenuItem { Header = "恢复默认外观" };
+            reset.Click += (_, _) =>
+            {
+                settings.ColorHex = null;
+                settings.ThemeColorHex = null;
+                settings.CustomAvatarPath = null;
+                settings.AvatarText = null;
+                settings.AvatarBgHex = null;
+                settings.AvatarBgHex2 = null;
+                settings.AvatarTextColorHex = null;
+                settings.AvatarShape = AvatarShape.Circle;
+                settings.AvatarBgStyle = AvatarBgStyle.Solid;
+                settings.AvatarOverlay = AvatarOverlay.None;
+                AppConfig.Current.Save();
+            };
+            menu.Items.Add(reset);
+            menu.IsOpen = true;
+        };
         // Visible toggle
         var vis = new Wpf.Ui.Controls.ToggleSwitch
         {
             IsChecked = settings.Visible,
+            ToolTip = "显示此账号的微标",
             VerticalAlignment = VerticalAlignment.Center,
         };
-        Grid.SetColumn(vis, 7);
+        Grid.SetColumn(vis, 4);
         row.Children.Add(vis);
         vis.Checked   += (_, _) => { settings.Visible = true;  AppConfig.Current.BrowserProfiles[profile.Key] = settings; AppConfig.Current.Save(); };
         vis.Unchecked += (_, _) => { settings.Visible = false; AppConfig.Current.BrowserProfiles[profile.Key] = settings; AppConfig.Current.Save(); };
@@ -633,6 +551,7 @@ public partial class BrowserBadgesPage : Page
     {
         var c = ResolveColor(p, s);
         btn.Background = new SolidColorBrush(c);
+        btn.Foreground = Luminance(c) > 0.6 ? Brushes.Black : Brushes.White;
         btn.BorderBrush = new SolidColorBrush(Color.FromArgb(0x40, 0, 0, 0));
         btn.BorderThickness = new Thickness(1);
     }
@@ -651,14 +570,13 @@ public partial class BrowserBadgesPage : Page
             cfg.BrowserProfiles[targetKey] = target;
         }
         target.AvatarText         = source.AvatarText;
-        target.AvatarBgHex        = source.AvatarBgHex;
+        target.AvatarBgHex        = source.AvatarBgHex ?? source.ThemeColorHex;
         target.AvatarBgHex2       = source.AvatarBgHex2;
         target.AvatarTextColorHex = source.AvatarTextColorHex;
         target.AvatarShape        = source.AvatarShape;
         target.AvatarBgStyle      = source.AvatarBgStyle;
         target.AvatarOverlay      = source.AvatarOverlay;
         target.CustomAvatarPath   = source.CustomAvatarPath;
-        cfg.Save();
     }
 
     private static Color ResolveAvatarColor(ChromeProfile p, BrowserProfileSettings s)
@@ -669,6 +587,7 @@ public partial class BrowserBadgesPage : Page
             if (hex.Length == 6 && uint.TryParse(hex, System.Globalization.NumberStyles.HexNumber, null, out uint v))
                 return Color.FromRgb((byte)((v >> 16) & 0xFF), (byte)((v >> 8) & 0xFF), (byte)(v & 0xFF));
         }
+        if (ParseFgHex(s.ThemeColorHex) is { } theme) return theme;
         // Match Chrome's default profile avatar: use the profile highlight
         // color from Local State. Falls back to the warm-yellow default
         // when Chrome hasn't set one yet (e.g. brand-new profile).
@@ -679,6 +598,7 @@ public partial class BrowserBadgesPage : Page
 
     private static Color ResolveColor(ChromeProfile p, BrowserProfileSettings s)
     {
+        if (ParseFgHex(s.ColorHex ?? s.ThemeColorHex) is { } color) return color;
         if (!string.IsNullOrEmpty(s.ColorHex))
         {
             var hex = s.ColorHex.TrimStart('#');
@@ -748,9 +668,7 @@ public partial class BrowserBadgesPage : Page
             return;
         }
         // Fallback: match Chrome — profile highlight color + initial.
-        var fallbackBg = p.ThemeColorRgb is int rgb
-            ? Color.FromRgb((byte)((rgb >> 16) & 0xFF), (byte)((rgb >> 8) & 0xFF), (byte)(rgb & 0xFF))
-            : Features.BrowserBadges.BadgeWindow.DefaultAvatarBg;
+        var fallbackBg = ResolveAvatarColor(p, s);
         host.Background = new SolidColorBrush(fallbackBg);
         text.Foreground = new SolidColorBrush(
             Luminance(fallbackBg) > 0.6 ? Colors.Black : Colors.White);
@@ -846,7 +764,9 @@ public partial class BrowserBadgesPage : Page
         try
         {
             var full = Path.GetFullPath(path);
-            if (full.StartsWith(Path.GetFullPath(AvatarDir), StringComparison.OrdinalIgnoreCase)
+            if (AppConfig.Current.BrowserProfiles.Values.Any(s =>
+                string.Equals(s.CustomAvatarPath, path, StringComparison.OrdinalIgnoreCase))) return;
+            if (Infrastructure.ManagedFilePath.IsDirectChild(full, AvatarDir)
                 && File.Exists(full))
                 File.Delete(full);
         }

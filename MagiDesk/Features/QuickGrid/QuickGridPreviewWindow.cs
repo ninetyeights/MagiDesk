@@ -19,6 +19,7 @@ internal sealed class QuickGridPreviewWindow : Window
 
     internal QuickGridPreviewWindow(Brush accent)
     {
+        MagiDesk.Native.AuxiliaryWindow.Attach(this);
         WindowStyle = WindowStyle.None;
         AllowsTransparency = true;
         Background = Brushes.Transparent;

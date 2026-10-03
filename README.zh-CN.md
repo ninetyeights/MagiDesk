@@ -2,6 +2,8 @@
 
 [English](README.md) | **中文**
 
+首版下载包的安装、升级、配置恢复和已知限制见 [发布使用说明](docs/RELEASE.md)，版本记录见 [CHANGELOG](CHANGELOG.md)。
+
 未来需求、优先级与开发顺序见 [TODO 开发计划](TODO.md)。
 
 PowerToys 风格的 Windows 桌面工具箱 —— 把一组窗口与浏览器效率工具集成在一个
@@ -26,7 +28,7 @@ Fluent 风格的托盘应用里。
 
 ### ▦ 窗口分区（FancyZones 风格）
 拖动时按住 **Shift** 把窗口吸附到分区。树状布局编辑器支持切割 / 合并 / 删除分区、
-拖动分隔条（整条网格线一起移动）；支持多个命名布局、按显示器分配、内置模板，以及相邻
+拖动分隔条（支持局部与全局切割、分割线转换）；支持多个命名布局、按显示器分配、内置模板，以及相邻
 分区的边缘合并带。
 
 ### ⊞ 快速网格
@@ -37,15 +39,17 @@ Fluent 风格的托盘应用里。
 跟随每个浏览器窗口的悬浮 profile 头像徽标，让你一眼分清众多 profile。多浏览器支持：
 Chrome、Edge、Brave、Vivaldi、Opera。每个 profile 的头像、颜色、显隐均可自定义。
 
-### ⌂ Profile Dock
-任务栏式的浮动 profile 头像条——点击即可启动、聚焦或轮询某个 profile 的窗口。支持命名
-分组、单个 / 所有显示器，以及自由浮动或贴边停靠（像系统任务栏一样预留屏幕空间）。
+### ⌂ Dock
+浏览器账号与普通应用可混排在集合、栏目中；通过“内容管理”维护集合，通过“项目库”选择应用和浏览器账号。支持运行中应用、窗口预览、固定应用、横向滚动／换行、图标大小，以及悬浮和任务栏占位模式。
+
+### 桌面盒子
+桌面文件归类、分页、映射目录、缩略图及临时唤出。统一桌面模式由应用显示桌面内容，并由恢复辅助进程保护系统图标恢复。首次使用请先了解[发布使用说明](docs/RELEASE.md)中的恢复方式。
 
 ## 其他
 
 ### 浏览器启动参数
 
-在「浏览器徽标」页展开「浏览器启动参数」，分别编辑 Chrome、Edge、Brave、Vivaldi、Opera 的附加参数，点击保存。参数适用于该浏览器的所有 profile，支持清空和命令示意预览；含空格的参数值使用双引号。
+在左侧「浏览器」下打开独立的「启动参数」页面，分别编辑 Chrome、Edge、Brave、Vivaldi、Opera 的附加参数，点击保存。参数适用于该浏览器的所有 profile，支持清空和命令示意预览；含空格的参数值使用双引号。
 
 参数用于 Dock 发起的浏览器启动，聚焦已有窗口不会重新应用参数，部分参数需完全退出浏览器后才生效。为保留正确的账号选择，不允许自定义 `--profile-directory`、`--user-data-dir` 或单独的 `--`。设置参数后直接启动浏览器程序；清空后恢复优先使用已有 profile 快捷方式的行为。
 
@@ -53,11 +57,12 @@ Chrome、Edge、Brave、Vivaldi、Opera。每个 profile 的头像、颜色、�
 - 可选开机自启（按用户 `HKCU\...\Run`）。
 - JSON 配置位于 `%APPDATA%\MagiDesk\config.json`，采用原子写入、`.bak` 回退与每日
   滚动备份。
+- 关于页面支持手动／自动检查 GitHub Releases 更新，确认后下载、校验并退出安装。自动检查默认关闭。
 - 诊断日志位于 `%TEMP%\magidesk.log`。
 
 ## 构建与运行
 
-需要 **.NET 10 SDK** 与 Windows 10/11。
+开发构建需要 **.NET 10 SDK** 与 Windows。自包含发布包无需另装运行时；首版验收范围见[发布使用说明](docs/RELEASE.md)。
 
 ```powershell
 dotnet run --project MagiDesk\MagiDesk.csproj
@@ -68,8 +73,8 @@ dotnet run --project MagiDesk\MagiDesk.csproj
 ### 测试
 
 ```powershell
-dotnet run --project MagiDesk.Tests            # 单元测试（注入真实输入）
-dotnet run --project MagiDesk.Tests -- --real-world   # 驱动真实 exe
+dotnet run --project MagiDesk.Tests -- --headless   # 无窗口回归，不操作用户桌面
+# --real-world 等交互测试会操作真实窗口，需单独安排
 ```
 
 ## 项目结构
@@ -84,3 +89,7 @@ MagiDesk/
   Hooks/           # 低级鼠标钩子
 MagiDesk.Tests/    # 控制台集成测试
 ```
+
+发布包构建：`powershell -ExecutionPolicy Bypass -File scripts/Publish-Release.ps1`。
+
+安装程序构建：在上述命令末尾添加 `-Installer`，需要 Inno Setup 6.3+。安装包及便携包均输出到 `publish`，附 SHA256 校验文件。

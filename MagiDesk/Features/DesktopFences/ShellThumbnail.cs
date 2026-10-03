@@ -48,25 +48,29 @@ internal static class ShellThumbnail
     /// (CreateBitmapSourceFromHBitmap would blacken transparent edges). The DIB
     /// can be bottom-up (positive biHeight) — flip its rows so it's not upside
     /// down.</summary>
-    private static ImageSource? FromHBitmap(IntPtr hbm, bool diagnoseAlpha)
+    internal static ImageSource? FromHBitmap(IntPtr hbm, bool diagnoseAlpha)
     {
         var ds = new DIBSECTION();
         if (GetObject(hbm, Marshal.SizeOf<DIBSECTION>(), ref ds) == 0) return null;
         int w = ds.dsBm.bmWidth, h = ds.dsBm.bmHeight;
-        if (w <= 0 || h <= 0 || ds.dsBm.bmBits == IntPtr.Zero || ds.dsBm.bmBitsPixel != 32) return null;
+        if (w <= 0 || h <= 0 || w > 8192 || h > 8192) return null;
 
-        int stride = w * 4, len = stride * h;
-        var raw = new byte[len];
-        Marshal.Copy(ds.dsBm.bmBits, raw, 0, len);
-
-        byte[] buffer;
-        if (ds.dsBmih.biHeight > 0)   // bottom-up DIB → flip rows to top-down
+        int stride = checked(w * 4), len = checked(stride * h);
+        var buffer = new byte[len];
+        var info = new BITMAPINFO
         {
-            buffer = new byte[len];
-            for (int row = 0; row < h; row++)
-                Array.Copy(raw, row * stride, buffer, (h - 1 - row) * stride, stride);
+            Header = new BITMAPINFOHEADER { biSize = (uint)Marshal.SizeOf<BITMAPINFOHEADER>(),
+                biWidth = w, biHeight = -h, biPlanes = 1, biBitCount = 32, biSizeImage = (uint)len },
+        };
+        var dc = CreateCompatibleDC(IntPtr.Zero);
+        if (dc == IntPtr.Zero) return null;
+        try
+        {
+            // Request top-down pixels explicitly. GDI handles the source's row
+            // orientation and stride, including provider-specific bitmap storage.
+            if (GetDIBits(dc, hbm, 0, (uint)h, buffer, ref info, 0) != h) return null;
         }
-        else buffer = raw;            // already top-down
+        finally { DeleteDC(dc); }
 
         var alpha = InspectAlpha(buffer);
         var format = SelectPixelFormat(alpha);
@@ -112,6 +116,13 @@ internal static class ShellThumbnail
 
     [DllImport("gdi32.dll")] private static extern int GetObject(IntPtr h, int c, ref DIBSECTION pv);
     [DllImport("gdi32.dll")] private static extern bool DeleteObject(IntPtr h);
+    [DllImport("gdi32.dll")] private static extern IntPtr CreateCompatibleDC(IntPtr dc);
+    [DllImport("gdi32.dll")] private static extern bool DeleteDC(IntPtr dc);
+    [DllImport("gdi32.dll")] private static extern int GetDIBits(IntPtr dc, IntPtr bitmap,
+        uint first, uint count, [Out] byte[] pixels, ref BITMAPINFO info, uint usage);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct BITMAPINFO { public BITMAPINFOHEADER Header; public uint Colors; }
 
     [StructLayout(LayoutKind.Sequential)]
     private struct SIZE { public int cx, cy; }
