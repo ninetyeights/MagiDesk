@@ -7,6 +7,37 @@ namespace MagiDesk.Tests;
 
 internal static class DockCollectionTests
 {
+    internal static void ContentLock()
+    {
+        var cfg = new AppConfig();
+        DockCollections.Ensure(cfg);
+        var first = DockCollections.Active(cfg)!;
+        var second = DockCollections.AddCollection(cfg, "另一集合");
+        var column = new BrowserDockGroup { Name = "应用" };
+        first.Segments.Add(column);
+        var app = new DockApplication { Name = "Editor", ExecutablePath = @"C:\Apps\editor.exe" };
+        Check(DockGroups.PinRunningApplication(cfg, app, column), "prepare pinned entry");
+        string key = column.ProfileDirs.Single();
+        cfg.BrowserDockLocked = true;
+        string before = JsonSerializer.Serialize(cfg);
+        Check(!DockGroups.PinRunningApplication(cfg,
+            new DockApplication { Name = "Other", ExecutablePath = @"C:\Apps\other.exe" }, column), "locked pin cannot import");
+        DockGroups.Detach(cfg, key);
+        DockGroups.RemoveApplication(cfg, cfg.DockApplications.Single().Id);
+        Check(!DockGroups.MoveInto(cfg, key, column), "locked move blocked");
+        Check(DockProjectMembership.Apply(cfg, new(first, column), new[] { key }, true) == 0, "library removal blocked");
+        Check(DockCollections.AddItems(cfg, first, column, new[] { "browser:profile" }) == 0, "library add blocked");
+        Check(!DockCollections.DeleteCollection(cfg, first), "collection deletion blocked");
+        Check(!DockCollections.ReorderCollection(cfg, first, second, true), "collection ordering blocked");
+        Check(JsonSerializer.Serialize(cfg) == before, "locked edits leave all configuration intact");
+        Check(DockGroups.Build(cfg, Array.Empty<ChromeProfile>()).SelectMany(g => g.Items).Count() == 1,
+            "locked contents remain visible");
+        Check(DockCollections.Activate(cfg, second), "switching existing collection remains allowed");
+        Check(DockCollections.Activate(cfg, first), "switch back while locked");
+        cfg.BrowserDockLocked = false;
+        Check(DockProjectMembership.Apply(cfg, new(first, column), new[] { key }, true) == 1, "unlock restores edits");
+    }
+
     internal static void PinRunningApplication()
     {
         var cfg = new AppConfig();

@@ -296,7 +296,7 @@ internal static class HeadlessTests
     {
         var area = new MagiDesk.Native.NativeMethods.RECT { Left = -1920, Top = 40, Right = 0, Bottom = 1080 };
         var monitor = new MagiDesk.Features.Zones.MonitorSlot(IntPtr.Zero, "primary", area, area, true, 150);
-        var config = new AppConfig { DesktopUnifiedSurface = true };
+        var config = new AppConfig();
         config.DesktopBoxes.Add(new DesktopBox { IsUnsorted = true });
         Check(DesktopBoxDefaults.EnsureClassificationBox(config, new[] { monitor }), "initialize classification box");
         var box = config.DesktopBoxes.Single(b => b.Id == config.DesktopInitialClassificationBoxId);
@@ -307,17 +307,17 @@ internal static class HeadlessTests
         config.DesktopBoxes.RemoveAll(b => !b.IsUnsorted);
         Check(!DesktopBoxDefaults.EnsureClassificationBox(config, new[] { monitor }) && config.DesktopBoxes.Count == 1,
             "deleted default is not recreated");
-        config = new AppConfig { DesktopUnifiedSurface = true };
+        config = new AppConfig();
         config.DesktopBoxes.Add(new DesktopBox { Name = "existing", X = 100, Y = 200 });
         DesktopBoxDefaults.EnsureClassificationBox(config, new[] { monitor });
         Check(config.DesktopBoxes.Count == 1 && config.DesktopBoxes[0].X == 100, "existing boxes retained without duplicate default");
         config = new AppConfig();
-        Check(!DesktopBoxDefaults.EnsureClassificationBox(config, new[] { monitor }), "classic desktop mode unchanged");
+        Check(DesktopBoxDefaults.EnsureClassificationBox(config, new[] { monitor }), "fresh configuration uses standard desktop presentation");
     }
 
     private static void DesktopInitialClassification()
     {
-        var config = new AppConfig { DesktopUnifiedSurface = true };
+        var config = new AppConfig();
         DesktopBoxDefaults.EnsureClassificationBox(config, Array.Empty<MagiDesk.Features.Zones.MonitorSlot>());
         var box = config.DesktopBoxes.Single(b => b.Id == config.DesktopInitialClassificationBoxId);
         var item = new DesktopItem(@"C:\Desktop\example.lnk", "example", null, false, 0, default, default);
@@ -350,7 +350,7 @@ internal static class HeadlessTests
         Check(box.MemberReferences.Single().PendingAssignment, "membership identity recovery preserved");
         box.Members.Clear();
         Check(!DesktopBoxDefaults.AssignInitialContents(config, new[] { item }, snapshot), "later refresh never reclaims desktop items");
-        config = new AppConfig { DesktopUnifiedSurface = true, DesktopDefaultBoxInitialized = true };
+        config = new AppConfig { DesktopDefaultBoxInitialized = true };
         config.DesktopBoxes.Add(new DesktopBox { Name = "桌面" });
         DesktopBoxDefaults.EnsureClassificationBox(config, Array.Empty<MagiDesk.Features.Zones.MonitorSlot>());
         Check(config.DesktopInitialClassificationBoxId == config.DesktopBoxes.Single(b => b.Name == "其他").Id, "previous empty default upgraded");
@@ -671,6 +671,19 @@ internal static class HeadlessTests
 
     private static void DockApplicationMatching()
     {
+        var docker = new DockApplication { Name = "Docker", LaunchPath = @"C:\Docker\Docker Desktop.exe", ExecutablePath = @"C:\Docker\Docker Desktop.exe" };
+        var dockerWindow = new DockApplicationRuntime.Window(new IntPtr(7), 70, @"C:\Docker\frontend\Docker Desktop.exe");
+        Check(DockApplicationRuntime.Matches(docker, dockerWindow), "Docker launcher did not match frontend");
+        Check(!DockApplicationRuntime.SameApplicationExecutable(docker.ExecutablePath, @"D:\Docker\frontend\Docker Desktop.exe"), "different Docker installations merged");
+        Check(!DockApplicationRuntime.SameApplicationExecutable(@"C:\App\tool.exe", @"C:\App\frontend\tool.exe"), "generic same-name executables merged");
+        Check(DockRunningItems.Build(new[] { dockerWindow }, new[] { docker }, new Dictionary<IntPtr, string>(),
+            Array.Empty<ChromeProfile>(), new HashSet<string>(), Array.Empty<DockItem>()).Count == 0, "Docker duplicated in running section");
+        var dockerConfig = new AppConfig();
+        dockerConfig.DockApplications.Add(docker);
+        var dockerGroup = new BrowserDockGroup { Name = "Applications" };
+        DockCollections.Groups(dockerConfig).Add(dockerGroup);
+        Check(DockGroups.PinRunningApplication(dockerConfig, new DockApplication { ExecutablePath = dockerWindow.ExecutablePath }, dockerGroup)
+            && dockerConfig.DockApplications.Count == 1 && dockerGroup.ProfileDirs.Contains(DockItem.ApplicationKey(docker.Id)), "pinning Docker did not reuse existing launcher");
         var windows = new[]
         {
             new DockApplicationRuntime.Window(new IntPtr(1), 10, @"C:\A\tool.exe"),
@@ -687,6 +700,22 @@ internal static class HeadlessTests
 
     private static void DockApplicationImport()
     {
+        var discovered = EmulatorInstanceDiscovery.Parse(new[]
+        {
+            "bst.instance.Pie64.display_name=\"中文账号\"",
+            "bst.instance.Pie64_1.display_name=\"第二个账号\"",
+            "bst.instance.Deleted.display_name=\"已删除\"",
+            "bst.instance.../escape.display_name=\"非法\"",
+            "bst.instance.Pie64.android_id=\"ignored\"",
+        }, @"C:\BlueStacks\HD-Player.exe", id => id is "Pie64" or "Pie64_1");
+        Check(discovered.Count == 2 && discovered[0].Name == "中文账号", "emulator config names or active instances incorrect");
+        var imported = new List<DockApplication>();
+        Check(EmulatorInstanceDiscovery.Add(imported, discovered[0]) && EmulatorInstanceDiscovery.Add(imported, discovered[1]), "distinct instances of same executable collapsed");
+        Check(!EmulatorInstanceDiscovery.Add(imported, discovered[0]), "repeat discovery created duplicates");
+        var msi = new DockApplication { ExecutablePath = @"C:\MSI\HD-Player.exe", LaunchPath = @"C:\MSI\HD-Player.exe", InstanceName = "Pie64" };
+        Check(EmulatorInstanceDiscovery.Add(imported, msi), "different emulator installations collapsed");
+        Check(DockApplicationRuntime.Matches(discovered[0], new DockApplicationRuntime.Window(new IntPtr(1), 1, discovered[0].ExecutablePath, "Pie64"))
+            && !DockApplicationRuntime.Matches(discovered[0], new DockApplicationRuntime.Window(new IntPtr(2), 2, discovered[0].ExecutablePath, "Pie64_1")), "discovered instance runtime matching wrong");
         string folder = Path.Combine(Path.GetTempPath(), "magidesk-dock-test-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(folder);
         try
@@ -694,6 +723,10 @@ internal static class HeadlessTests
             string executable = Path.Combine(folder, "中文 app.exe");
             File.WriteAllBytes(executable, Array.Empty<byte>());
             var app = DockApplicationRuntime.Import(executable);
+            string player = Path.Combine(folder, "HD-Player.exe");
+            File.WriteAllBytes(player, Array.Empty<byte>());
+            var instanceStart = DockApplicationRuntime.CreateStartInfo(new DockApplication { LaunchPath = player, ExecutablePath = player, InstanceName = "Pie64_1" });
+            Check(instanceStart.ArgumentList.SequenceEqual(new[] { "--instance", "Pie64_1" }), "discovered instance launch arguments lost");
             Check(app.Name == "中文 app" && app.ExecutablePath == executable, "import retains spaces and Unicode");
             var start = DockApplicationRuntime.CreateStartInfo(app);
             Check(start.FileName == executable && start.UseShellExecute && start.Arguments == "", "launch does not use a command interpreter");
@@ -806,6 +839,7 @@ internal static class HeadlessTests
                 Check(!BadgeWindow.IsBadgeHandle(IntPtr.Zero), "unknown window never excluded from dragging");
             }),
             ("quick grid: drag restore switches independent of zones", IndependentDragRestore),
+            ("dock collections: content lock and switching", DockCollectionTests.ContentLock),
             ("dock collections: pin running applications", DockCollectionTests.PinRunningApplication),
             ("dock collections: legacy migration and restart", DockCollectionTests.Migration),
             ("dock collections: flat ordering across legacy groups", DockCollectionTests.FlatCollectionOrder),
@@ -854,7 +888,7 @@ internal static class HeadlessTests
             ("zones: protected first-placement DPI compensation", ProtectedSnapDpiSize),
             ("drag: cross-DPI proportional grab point", CrossDpiMove),
             ("quick grid: preview clips and maps physical bounds", QuickGridPreviewGeometry),
-            ("fences: unified desktop partition and opt-in persistence", UnifiedDesktop),
+            ("fences: desktop partition and legacy mode migration", UnifiedDesktop),
             ("fences: shell new-item attribution stays in originating folder", NewItemAttribution),
             ("fences: elastic grid spacing and marquee agree", ElasticFenceGrid),
             ("desktop: column-first layout, marquee and keyboard navigation", DesktopColumnLayout),
@@ -1124,10 +1158,14 @@ internal static class HeadlessTests
         Check(DesktopFenceService.ResolveBoxItems(desktop, items, new[] { desktop, portal }).Count == 2,
             "removing group did not restore loose item");
         var config = new AppConfig();
-        Check(!config.DesktopUnifiedSurface, "experiment must be opt-in");
-        config.DesktopUnifiedSurface = true;
-        var roundTrip = System.Text.Json.JsonSerializer.Deserialize<AppConfig>(System.Text.Json.JsonSerializer.Serialize(config));
-        Check(roundTrip!.DesktopUnifiedSurface, "experiment setting not persisted");
+        Check(!config.DesktopFencesEnabled, "desktop boxes remain opt-in as a feature");
+        var migrated = System.Text.Json.JsonSerializer.Deserialize<AppConfig>(
+            "{\"DesktopUnifiedSurface\":false,\"DesktopFencesEnabled\":true}")!;
+        Check(migrated.DesktopFencesEnabled, "legacy mode must not disable enabled boxes");
+        Check(!System.Text.Json.JsonSerializer.Serialize(migrated).Contains("DesktopUnifiedSurface"),
+            "obsolete experiment option must not be persisted");
+        Check(DesktopBoxDefaults.EnsureClassificationBox(migrated, Array.Empty<MagiDesk.Features.Zones.MonitorSlot>()),
+            "old disabled experiment still initializes the standard desktop boxes");
     }
 
     private static void FenceDesktopLayer()
@@ -1244,6 +1282,12 @@ internal static class HeadlessTests
 
     private static void BrowserLaunchParameters()
     {
+        Check(MagiDesk.Native.BrowserCommandLine.ApplyAudioPreset("") == MagiDesk.Native.BrowserCommandLine.AudioPreset, "wrong default audio preset");
+        var audio = MagiDesk.Native.BrowserCommandLine.ApplyAudioPreset("--lang=zh-CN --disable-features=OtherFeature --disable-features=ChromeWideEchoCancellation \"C:\\space dir\\\\\"");
+        var audioArgs = MagiDesk.Native.BrowserCommandLine.Parse(audio);
+        Check(audioArgs.Contains(@"C:\space dir\") && audioArgs.Contains("--lang=zh-CN"), "audio preset changed unrelated arguments");
+        Check(audioArgs.Count(x => x.StartsWith("--disable-features=")) == 1 && audioArgs.Contains("--disable-features=OtherFeature,ChromeWideEchoCancellation,WebRtcAllowInputVolumeAdjustment"), "audio features not merged");
+        Check(MagiDesk.Native.BrowserCommandLine.ApplyAudioPreset(audio) == audio, "audio preset not idempotent");
         var start = MagiDesk.Features.ProfileDock.ChromeLauncher.CreateStartInfo(
             @"C:\Program Files\Browser\browser.exe", "Profile 2", "--lang=zh-CN --disk-cache-dir=\"C:\\中文 目录\" \"\" \"a&b\"");
         Check(!start.UseShellExecute && start.ArgumentList[0] == "--profile-directory=Profile 2", "unsafe shell or wrong profile");

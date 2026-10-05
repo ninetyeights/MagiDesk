@@ -20,7 +20,6 @@ internal static class DesktopBoxDefaults
 
     internal static bool EnsureClassificationBox(AppConfig config, IReadOnlyList<MonitorSlot> monitors)
     {
-        if (!config.DesktopUnifiedSurface) return false;
         bool changed = false;
         if (!config.DesktopDefaultBoxInitialized)
         {
@@ -61,7 +60,7 @@ internal static class DesktopBoxDefaults
     internal static bool AssignInitialContents(AppConfig config, IReadOnlyList<DesktopItem> items,
         DesktopMembershipSnapshot snapshot)
     {
-        if (!config.DesktopUnifiedSurface || config.DesktopInitialClassificationBoxId is not { } id
+        if (config.DesktopInitialClassificationBoxId is not { } id
             || !snapshot.IsComplete) return false;
         var target = config.DesktopBoxes.FirstOrDefault(b => b.Id == id && !b.IsUnsorted && b.FolderPath is null);
         if (target is not null)

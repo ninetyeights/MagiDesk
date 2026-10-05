@@ -80,7 +80,7 @@ public partial class DockProjectManager : UserControl
 
     private string ContentSnapshot() => System.Text.Json.JsonSerializer.Serialize(new
     {
-        Config.DockNavigationGroups, Config.ActiveDockCollectionId, Config.DockApplications, Config.BrowserProfiles,
+        Config.DockNavigationGroups, Config.ActiveDockCollectionId, Config.DockApplications, Config.BrowserProfiles, Config.BrowserDockLocked,
     });
 
     private async Task ReloadCatalog()
@@ -99,6 +99,7 @@ public partial class DockProjectManager : UserControl
     private void RefreshContent(bool rebuildTree = true)
     {
         if (_updating) return;
+        RefreshLayoutLock();
         if (!DockCollections.All(Config).Contains(_selected)) _selected = DockCollections.Active(Config);
         if (_selected is null) return;
         long started = System.Diagnostics.Stopwatch.GetTimestamp();
@@ -194,9 +195,9 @@ public partial class DockProjectManager : UserControl
     {
         if (LibraryList is null || LibrarySummary is null || AddSelectedButton is null) return;
         LibrarySummary.Text = $"当前 {LibraryList.Items.Count} 项，共选 {_librarySelection.Count} 项";
-        AddSelectedButton.IsEnabled = _librarySelection.Count > 0;
-        RemoveLibraryButton.IsEnabled = DockProjectMembership.Targets(Config, _librarySelection).Count > 0;
-        DeleteLibraryButton.IsEnabled = Config.DockApplications.Any(a => _librarySelection.Contains(DockItem.ApplicationKey(a.Id)));
+        AddSelectedButton.IsEnabled = LayoutEditingEnabled && _librarySelection.Count > 0;
+        RemoveLibraryButton.IsEnabled = LayoutEditingEnabled && DockProjectMembership.Targets(Config, _librarySelection).Count > 0;
+        DeleteLibraryButton.IsEnabled = LayoutEditingEnabled && Config.DockApplications.Any(a => _librarySelection.Contains(DockItem.ApplicationKey(a.Id)));
 
     }
 
@@ -225,6 +226,7 @@ public partial class DockProjectManager : UserControl
             AttachTreeDrag(node, collection.Id);
             node.Drop += (_, e) =>
             {
+                if (DockLayoutLock.IsLocked) { e.Handled = true; return; }
                 if (e.Data.GetData("MagiDesk.DockCollection") is not string id) return;
                 var source = DockCollections.All(Config).FirstOrDefault(c => c.Id == id);
                 if (source is not null && DockCollections.ReorderCollection(Config, source, collection,
@@ -254,6 +256,7 @@ public partial class DockProjectManager : UserControl
 
     private void MoveCollection(DockCollection collection, int direction)
     {
+        if (!CanEditLayout()) return;
         var list = DockCollections.All(Config).ToList();
         int index = list.IndexOf(collection), target = index + direction;
         if (index < 0 || target < 0 || target >= list.Count) return;
@@ -264,7 +267,7 @@ public partial class DockProjectManager : UserControl
     {
         node.DragOver += (_, e) =>
         {
-            e.Effects = e.Data.GetDataPresent("MagiDesk.DockCollection")
+            e.Effects = !DockLayoutLock.IsLocked && e.Data.GetDataPresent("MagiDesk.DockCollection")
                 ? DragDropEffects.Move : DragDropEffects.None;
             e.Handled = true;
         };
@@ -276,7 +279,7 @@ public partial class DockProjectManager : UserControl
         };
         node.PreviewMouseMove += (_, e) =>
         {
-            if (e.LeftButton != MouseButtonState.Pressed || origin is null) return;
+            if (DockLayoutLock.IsLocked || e.LeftButton != MouseButtonState.Pressed || origin is null) return;
             var point = e.GetPosition(node);
             if (Math.Abs(point.X - origin.Value.X) < SystemParameters.MinimumHorizontalDragDistance &&
                 Math.Abs(point.Y - origin.Value.Y) < SystemParameters.MinimumVerticalDragDistance) return;
@@ -307,7 +310,7 @@ public partial class DockProjectManager : UserControl
         node.PreviewMouseLeftButtonUp += (_, _) => origin = null;
         node.PreviewMouseMove += (_, e) =>
         {
-            if (origin is null || e.LeftButton != MouseButtonState.Pressed) return;
+            if (DockLayoutLock.IsLocked || origin is null || e.LeftButton != MouseButtonState.Pressed) return;
             var point = e.GetPosition(node);
             if (Math.Abs(point.X - origin.Value.X) < SystemParameters.MinimumHorizontalDragDistance &&
                 Math.Abs(point.Y - origin.Value.Y) < SystemParameters.MinimumVerticalDragDistance) return;
@@ -319,12 +322,13 @@ public partial class DockProjectManager : UserControl
         {
             bool members = e.Data.GetDataPresent("MagiDesk.DockMembers") && collection == _selected;
             bool columns = e.Data.GetData("MagiDesk.DockColumn") is ColumnSelection source && source.Collection == collection;
-            e.Effects = members || columns ? DragDropEffects.Move : DragDropEffects.None;
+            e.Effects = !DockLayoutLock.IsLocked && (members || columns) ? DragDropEffects.Move : DragDropEffects.None;
             e.Handled = true;
         };
         node.Drop += (_, e) =>
         {
             e.Handled = true;
+            if (!CanEditLayout()) return;
             if (collection == _selected && e.Data.GetData("MagiDesk.DockMembers") is string[] keys)
             {
                 DockCollections.AddItems(Config, collection, column, keys); Config.Save();
@@ -385,6 +389,7 @@ public partial class DockProjectManager : UserControl
 
     private void NewCollection_Click(object sender, RoutedEventArgs e)
     {
+        if (!CanEditLayout()) return;
         var name = AskName("新建集合", "新集合");
         if (name is null) return;
         _selected = DockCollections.AddCollection(Config, name);
@@ -398,6 +403,7 @@ public partial class DockProjectManager : UserControl
     }
     private void NewSegment_Click(object sender, RoutedEventArgs e)
     {
+        if (!CanEditLayout()) return;
         if (_selected is null) return;
         var name = AskName("新建栏目", "常用");
         if (name is null) return;
@@ -412,6 +418,7 @@ public partial class DockProjectManager : UserControl
 
     private void RemoveSelected_Click(object sender, RoutedEventArgs e)
     {
+        if (!CanEditLayout()) return;
         if (_selected is null) return;
         DockCollections.RemoveItems(_selected, CheckedMembers.Select(r => r.Key).ToArray());
         Config.Save();
@@ -420,13 +427,14 @@ public partial class DockProjectManager : UserControl
     private void MoveDown_Click(object sender, RoutedEventArgs e) => MoveSelected(1);
     private void MoveSelected(int direction)
     {
+        if (!CanEditLayout()) return;
         if (Segment is not { } segment) return;
         DockCollections.MoveItems(segment, CheckedMembers.Select(r => r.Key), direction);
         Config.Save();
     }
     private void IncludeUngrouped_Changed(object sender, RoutedEventArgs e)
     {
-        if (_updating || _selected is null) return;
+        if (_updating || _selected is null || !CanEditLayout()) return;
         _selected.IncludeUngroupedProfiles = IncludeUngrouped.IsChecked == true;
         Config.Save();
     }
@@ -488,7 +496,7 @@ public partial class DockProjectManager : UserControl
     private void Members_MouseDown(object sender, MouseButtonEventArgs e) => _memberDragOrigin = e.GetPosition(MemberList);
     private void Members_MouseMove(object sender, MouseEventArgs e)
     {
-        if (e.LeftButton != MouseButtonState.Pressed || _memberDragOrigin is null || !CheckedMembers.Any()) return;
+        if (DockLayoutLock.IsLocked || e.LeftButton != MouseButtonState.Pressed || _memberDragOrigin is null || !CheckedMembers.Any()) return;
         var point = e.GetPosition(MemberList);
         if (Math.Abs(point.X - _memberDragOrigin.Value.X) < SystemParameters.MinimumHorizontalDragDistance &&
             Math.Abs(point.Y - _memberDragOrigin.Value.Y) < SystemParameters.MinimumVerticalDragDistance) return;
@@ -497,11 +505,12 @@ public partial class DockProjectManager : UserControl
     }
     private void Members_DragOver(object sender, DragEventArgs e)
     {
-        e.Effects = e.Data.GetDataPresent("MagiDesk.DockMembers") ? DragDropEffects.Move : DragDropEffects.None;
+        e.Effects = !DockLayoutLock.IsLocked && e.Data.GetDataPresent("MagiDesk.DockMembers") ? DragDropEffects.Move : DragDropEffects.None;
         e.Handled = true;
     }
     private void Members_Drop(object sender, DragEventArgs e)
     {
+        if (!CanEditLayout()) return;
         e.Handled = true;
         if (Segment is not { } segment || e.Data.GetData("MagiDesk.DockMembers") is not string[] keys) return;
         var target = ItemsControl.ContainerFromElement(MemberList, e.OriginalSource as DependencyObject) as ListBoxItem;
@@ -516,6 +525,7 @@ public partial class DockProjectManager : UserControl
 
     private void Rename(DockCollection item)
     {
+        if (!CanEditLayout()) return;
         string old = item.Name;
         var name = AskName("重命名", old);
         if (name is null) return;
@@ -524,6 +534,7 @@ public partial class DockProjectManager : UserControl
     }
     private void DeleteCollection(DockCollection collection)
     {
+        if (!CanEditLayout()) return;
         if (!Confirm($"删除集合「{collection.Name}」？项目库保留。若删除正在使用的集合，将切换到剩余第一个集合。")) return;
         if (DockCollections.DeleteCollection(Config, collection)) Config.Save();
     }
@@ -536,11 +547,13 @@ public partial class DockProjectManager : UserControl
     private static void AddMenu(ContextMenu menu, string title, Action action, bool enabled = true)
     {
         var item = new MenuItem { Header = title, IsEnabled = enabled };
-        item.Click += (_, _) => action(); menu.Items.Add(item);
+        DockLayoutLock.Protect(menu, item, enabled);
+        item.Click += (_, _) => { if (!DockLayoutLock.IsLocked) action(); }; menu.Items.Add(item);
     }
-    private bool Confirm(string message) => MessageBox.Show(Window.GetWindow(this), message, "Dock 内容管理", MessageBoxButton.OKCancel, MessageBoxImage.Question) == MessageBoxResult.OK;
+    private bool Confirm(string message) => MessageBox.Show(Window.GetWindow(this), message, "Dock 内容管理", MessageBoxButton.OKCancel, MessageBoxImage.Question) == MessageBoxResult.OK && CanEditLayout();
     private string? AskName(string title, string initial)
     {
+        if (!CanEditLayout()) return null;
         var dialog = new Window { Title = title, Owner = Window.GetWindow(this), Width = 360, SizeToContent = SizeToContent.Height,
             ResizeMode = System.Windows.ResizeMode.NoResize, WindowStartupLocation = WindowStartupLocation.CenterOwner, ShowInTaskbar = false };
         var panel = new StackPanel { Margin = new Thickness(20) };
@@ -553,6 +566,6 @@ public partial class DockProjectManager : UserControl
         buttons.Children.Add(cancel); buttons.Children.Add(ok); panel.Children.Add(buttons); dialog.Content = panel;
         dialog.Loaded += (_, _) => { input.Focus(); input.SelectAll(); };
         MagiDesk.Native.AuxiliaryWindow.Attach(dialog);
-        return dialog.ShowDialog() == true ? input.Text.Trim() : null;
+        return dialog.ShowDialog() == true && CanEditLayout() ? input.Text.Trim() : null;
     }
 }

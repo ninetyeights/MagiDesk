@@ -14,6 +14,7 @@ public partial class ProfileDockWindow
         void Populate()
         {
             menu.Items.Clear();
+            DockLayoutLock.AddControls(menu, refreshOnOpen: false);
             var app = item.Application!;
             var open = new MenuItem { Header = new TextBlock { Text = "打开 " + app.Name,
                 MaxWidth = 320, TextTrimming = TextTrimming.CharacterEllipsis } };
@@ -22,11 +23,12 @@ public partial class ProfileDockWindow
             menu.Items.Add(open);
             menu.Items.Add(new Separator());
 
-            AddGroupMenu(menu, item.Key, item.RunningOnly ? app : null, includeRemove: false);
+            AddGroupMenu(menu, item.Key, item.RunningOnly ? app : null, includeRemove: false, refreshOnOpen: false);
             if (!item.RunningOnly)
             {
                 var unpin = new MenuItem { Header = "从当前 Dock 取消固定",
                     IsEnabled = !AppConfig.Current.BrowserDockLocked };
+                DockLayoutLock.Protect(menu, unpin, refreshOnOpen: false);
                 unpin.Click += (_, _) =>
                 {
                     var cfg = AppConfig.Current;

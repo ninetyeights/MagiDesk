@@ -49,20 +49,12 @@ public partial class DesktopFencesPage : Page
 
     private void OnConfigChanged() => Dispatcher.BeginInvoke(new Action(PullToggles));
 
-    private void UnifiedSurface_Changed(object sender, RoutedEventArgs e)
-    {
-        if (_loading) return;
-        AppConfig.Current.DesktopUnifiedSurface = TsUnifiedSurface.IsChecked == true;
-        AppConfig.Current.Save();
-    }
-
     private void PullToggles()
     {
         _loading = true;
-        TsUnifiedSurface.IsChecked = AppConfig.Current.DesktopUnifiedSurface;
         TsEnabled.IsChecked = AppConfig.Current.DesktopFencesEnabled;
         var selectedId = AppearanceBox.SelectedValue as string;
-        var choices = BoxAppearanceScope.Choices(AppConfig.Current.DesktopBoxes, AppConfig.Current.DesktopUnifiedSurface);
+        var choices = BoxAppearanceScope.Choices(AppConfig.Current.DesktopBoxes, true);
         if (AppearanceBox.ItemsSource is not BoxAppearanceScope.Choice[] oldChoices || !oldChoices.SequenceEqual(choices))
         {
             AppearanceBox.ItemsSource = choices;
@@ -81,7 +73,7 @@ public partial class DesktopFencesPage : Page
     }
 
     private DesktopBox[] AppearanceTargets => BoxAppearanceScope.Targets(AppConfig.Current.DesktopBoxes,
-        AppConfig.Current.DesktopUnifiedSurface, AppearanceBox.SelectedValue as string);
+        true, AppearanceBox.SelectedValue as string);
     private DesktopBox? SelectedAppearanceBox => AppearanceTargets.FirstOrDefault();
 
     private void ChangeAppearance(Func<DesktopBox, bool> needsChange, Action<DesktopBox> change)

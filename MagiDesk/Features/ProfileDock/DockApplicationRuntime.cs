@@ -87,14 +87,32 @@ internal static partial class DockApplicationRuntime
 
     internal static List<Window> Match(string executable, IEnumerable<Window> windows)
         => string.IsNullOrWhiteSpace(executable) ? new() : windows.Where(w =>
-            string.Equals(executable, w.ExecutablePath, StringComparison.OrdinalIgnoreCase)).ToList();
+            SameApplicationExecutable(executable, w.ExecutablePath)).ToList();
+
+    internal static bool SameApplicationExecutable(string first, string second)
+    {
+        if (string.IsNullOrWhiteSpace(first) || string.IsNullOrWhiteSpace(second)) return false;
+        if (string.Equals(first, second, StringComparison.OrdinalIgnoreCase)) return true;
+        // Docker's launcher and its UI are separate executables in the same installation.
+        // Keep this explicit: matching arbitrary filenames or child directories merges unrelated apps.
+        static string? DockerRoot(string path)
+        {
+            if (!Path.IsPathFullyQualified(path) ||
+                !Path.GetFileName(path).Equals("Docker Desktop.exe", StringComparison.OrdinalIgnoreCase)) return null;
+            string? directory = Path.GetDirectoryName(path);
+            return Path.GetFileName(directory)?.Equals("frontend", StringComparison.OrdinalIgnoreCase) == true
+                ? Path.GetDirectoryName(directory) : directory;
+        }
+        string? root = DockerRoot(first);
+        return root is not null && string.Equals(root, DockerRoot(second), StringComparison.OrdinalIgnoreCase);
+    }
 
     internal static List<Window> Match(DockApplication app, IEnumerable<Window> windows)
         => windows.Where(w => Matches(app, w)).ToList();
 
     internal static bool Matches(DockApplication app, Window window)
     {
-        if (!string.Equals(app.ExecutablePath, window.ExecutablePath, StringComparison.OrdinalIgnoreCase)) return false;
+        if (!SameApplicationExecutable(app.ExecutablePath, window.ExecutablePath)) return false;
         if (!IsInstancePlayer(app.ExecutablePath)) return true;
         string? instance = app.InstanceName;
         if (Path.GetExtension(app.LaunchPath).Equals(".lnk", StringComparison.OrdinalIgnoreCase))

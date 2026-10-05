@@ -14,7 +14,7 @@ internal static class ChromeLauncher
     internal static string FormatCommand(ProcessStartInfo start)
         => string.Join(" ", new[] { start.FileName }.Concat(start.ArgumentList).Select(Quote));
 
-    private static string Quote(string value)
+    internal static string Quote(string value)
     {
         var result = new System.Text.StringBuilder("\"");
         int slashes = 0;

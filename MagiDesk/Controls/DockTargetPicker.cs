@@ -36,7 +36,7 @@ internal sealed class DockTargetPicker : UserControl
             createCollection.Click += (_, _) =>
             {
                 var name = _askName("新建集合", "新集合");
-                if (name is null) return;
+                if (name is null || config.BrowserDockLocked) return;
                 var added = DockCollections.AddCollection(config, name);
                 var first = new BrowserDockGroup { Name = "常用" };
                 added.Segments.Add(first);
@@ -51,7 +51,7 @@ internal sealed class DockTargetPicker : UserControl
                 };
                 if (owner is null || !DockCollections.All(config).Contains(owner)) { _target.Text = "请先选择集合。"; return; }
                 var name = _askName("新建栏目", "常用");
-                if (name is null) return;
+                if (name is null || config.BrowserDockLocked) return;
                 var added = new BrowserDockGroup { Name = name };
                 owner.Segments.Add(added); _selected = new(owner, added);
                 config.Save(); _search.Clear(); Rebuild();
@@ -65,7 +65,7 @@ internal sealed class DockTargetPicker : UserControl
             TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 8), FontSize = 12,
         });
         _apply = new Button { Content = remove ? "确认移除" : "确认添加", IsEnabled = false };
-        _apply.Click += (_, _) => { if (_selected is not null) Confirmed?.Invoke(_selected); };
+        _apply.Click += (_, _) => { if (!_config.BrowserDockLocked && _selected is not null) Confirmed?.Invoke(_selected); };
         body.Children.Add(_apply);
         var border = new Border { Padding = new Thickness(16), BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(8), Child = body, Width = 330 };
         border.SetResourceReference(Border.BackgroundProperty, "SolidBackgroundFillColorBaseBrush");
@@ -103,6 +103,6 @@ internal sealed class DockTargetPicker : UserControl
     private void UpdateTarget()
     {
         _target.Text = _selected is null ? "请选择目标栏目。" : $"{(_remove ? "移除自" : "添加到")}：{_selected.Label}";
-        _apply.IsEnabled = _selected is not null;
+        _apply.IsEnabled = !_config.BrowserDockLocked && _selected is not null;
     }
 }

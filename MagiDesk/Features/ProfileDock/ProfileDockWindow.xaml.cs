@@ -83,6 +83,8 @@ public partial class ProfileDockWindow : Window
         Mode = mode;
         _nativeRounded = mode == DockMode.Floating && OperatingSystem.IsWindowsVersionAtLeast(10, 0, 22000);
         InitializeComponent();
+        ContextMenu = new ContextMenu();
+        DockLayoutLock.AddControls(ContextMenu);
         MagiDesk.Native.AuxiliaryWindow.Attach(this);
         if (_nativeRounded)
         {
@@ -968,29 +970,13 @@ public partial class ProfileDockWindow : Window
     private static ContextMenu BuildProfileContextMenu(ChromeProfile p, BrowserProfileSettings s)
     {
         var menu = new ContextMenu();
-        var cfg = AppConfig.Current;
-        bool locked = cfg.BrowserDockLocked;
-
-        var lockItem = new MenuItem
-        {
-            Header      = "锁定排序",
-            IsCheckable = true,
-            IsChecked   = locked,
-        };
-        // Toggle on Click rather than Checked/Unchecked so the persisted
-        // value flips even when WPF's checked-state restoration races the
-        // user's click after a dock rebuild.
-        lockItem.Click += (_, _) =>
-        {
-            AppConfig.Current.BrowserDockLocked = !AppConfig.Current.BrowserDockLocked;
-            AppConfig.Current.Save();
-        };
-        menu.Items.Add(lockItem);
-        menu.Items.Add(new Separator());
+        DockLayoutLock.AddControls(menu);
 
         var disable = new MenuItem { Header = "禁用 (从 dock 隐藏)" };
+        DockLayoutLock.Protect(menu, disable);
         disable.Click += (_, _) =>
         {
+            if (DockLayoutLock.IsLocked) return;
             // Persist via the same field BrowserBadgesPage uses — toggles both
             // the floating badge and the dock button via Changed → RefreshDock.
             s.Visible = false;
@@ -1000,10 +986,12 @@ public partial class ProfileDockWindow : Window
         menu.Items.Add(disable);
 
         var edit = new MenuItem { Header = "编辑徽标..." };
+        DockLayoutLock.Protect(menu, edit);
         edit.Click += (_, _) =>
         {
+            if (DockLayoutLock.IsLocked) return;
             var dlg = new AvatarTextEditorWindow(p, s, maxTextLength: 0) { Owner = null };
-            if (dlg.ShowDialog() == true)
+            if (dlg.ShowDialog() == true && !DockLayoutLock.IsLocked)
             {
                 AppConfig.Current.BrowserProfiles[p.Key] = s;
                 AppConfig.Current.Save();
@@ -1036,17 +1024,18 @@ public partial class ProfileDockWindow : Window
 
     /// <summary>Shared group commands for fixed applications and browser accounts.</summary>
     private static void AddGroupMenu(ContextMenu menu, string key, DockApplication? runningApplication = null,
-        bool includeRemove = true)
+        bool includeRemove = true, bool refreshOnOpen = true)
     {
         var cfg = AppConfig.Current;
-        bool locked = cfg.BrowserDockLocked;
         var groups = DockCollections.Groups(cfg);
         var currentGroup = groups.FirstOrDefault(g =>
             g.ProfileDirs.Contains(key, StringComparer.OrdinalIgnoreCase));
-        // Group membership submenu — disabled while the dock is locked.
-        var moveTo = new MenuItem { Header = runningApplication is null ? "移动到栏目" : "固定到栏目", IsEnabled = !locked };
+        // Lock protects explicit content edits as well as drag sorting.
+        var moveTo = new MenuItem { Header = runningApplication is null ? "移动到栏目" : "固定到栏目" };
+        DockLayoutLock.Protect(menu, moveTo, refreshOnOpen: refreshOnOpen);
         void MoveTo(BrowserDockGroup target)
         {
+            if (DockLayoutLock.IsLocked) return;
             if (runningApplication is null) MoveProfileToGroup(key, target);
             else if (DockGroups.PinRunningApplication(cfg, runningApplication, target)) cfg.Save();
         }
@@ -1080,8 +1069,9 @@ public partial class ProfileDockWindow : Window
         var removeFromGroup = new MenuItem
         {
             Header   = "从当前集合移除",
-            IsEnabled = currentGroup is not null && !locked,
+            IsEnabled = currentGroup is not null,
         };
+        DockLayoutLock.Protect(menu, removeFromGroup, currentGroup is not null);
         removeFromGroup.Click += (_, _) => RemoveProfileFromAllGroups(key);
         menu.Items.Add(removeFromGroup);
     }
@@ -1102,6 +1092,7 @@ public partial class ProfileDockWindow : Window
     /// xaml file, and avoids pulling in Microsoft.VisualBasic.</summary>
     private static string? PromptForText(string title, string prompt, string defaultValue)
     {
+        if (DockLayoutLock.IsLocked) return null;
         var dlg = new Window
         {
             Title = title,
@@ -1127,7 +1118,7 @@ public partial class ProfileDockWindow : Window
         okBtn.Click += (_, _) => { result = input.Text; dlg.DialogResult = true; };
         input.Loaded += (_, _) => { input.Focus(); input.SelectAll(); };
         MagiDesk.Native.AuxiliaryWindow.Attach(dlg);
-        return dlg.ShowDialog() == true ? result : null;
+        return dlg.ShowDialog() == true && !DockLayoutLock.IsLocked ? result : null;
     }
 
     private static void ApplyAvatarVisual(Border host, TextBlock text, Canvas overlay,

@@ -50,6 +50,7 @@ internal static class DockGroups
 
     internal static void Detach(AppConfig cfg, string key)
     {
+        if (cfg.BrowserDockLocked) return;
         foreach (var group in DockCollections.Groups(cfg)) group.ProfileDirs.RemoveAll(k => Same(k, key));
         DockCollections.UngroupedOrder(cfg).RemoveAll(k => Same(k, key));
         // Empty named groups remain valid destinations in settings.
@@ -57,11 +58,12 @@ internal static class DockGroups
 
     internal static bool PinRunningApplication(AppConfig cfg, DockApplication running, BrowserDockGroup target)
     {
+        if (cfg.BrowserDockLocked) return false;
         // Validate the destination before importing; a stale menu must not create orphan entries.
         if (!DockCollections.Groups(cfg).Contains(target) ||
             !DockApplicationRuntime.IsSupportedPath(running.ExecutablePath)) return false;
         var app = cfg.DockApplications.FirstOrDefault(a =>
-            Same(a.ExecutablePath, running.ExecutablePath) &&
+            DockApplicationRuntime.SameApplicationExecutable(a.ExecutablePath, running.ExecutablePath) &&
             string.Equals(a.InstanceName, running.InstanceName, StringComparison.OrdinalIgnoreCase));
         if (app is null)
         {
@@ -78,6 +80,7 @@ internal static class DockGroups
     internal static bool MoveInto(AppConfig cfg, string key, BrowserDockGroup target,
         string? neighbor = null, bool after = false)
     {
+        if (cfg.BrowserDockLocked) return false;
         if (string.IsNullOrEmpty(key) || !DockCollections.Groups(cfg).Contains(target) ||
             (neighbor is not null && (Same(key, neighbor) || !target.ProfileDirs.Any(k => Same(k, neighbor))))) return false;
         Detach(cfg, key);
@@ -89,6 +92,7 @@ internal static class DockGroups
     internal static bool Reorder(AppConfig cfg, IReadOnlyList<ChromeProfile> profiles,
         string source, string target, bool after)
     {
+        if (cfg.BrowserDockLocked) return false;
         var catalog = profiles.Select(p => new DockItem(p)).Concat(cfg.DockApplications.Select(a => new DockItem(a))).ToList();
         var from = catalog.FirstOrDefault(i => Same(i.Key, source));
         var to = catalog.FirstOrDefault(i => Same(i.Key, target));
@@ -115,6 +119,7 @@ internal static class DockGroups
 
     internal static void RemoveApplication(AppConfig cfg, string id)
     {
+        if (cfg.BrowserDockLocked) return;
         cfg.DockApplications.RemoveAll(a => Same(a.Id, id));
         Detach(cfg, DockItem.ApplicationKey(id));
         foreach (var collection in DockCollections.All(cfg)) DockCollections.RemoveItems(collection, new[] { DockItem.ApplicationKey(id) });

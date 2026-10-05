@@ -18,7 +18,7 @@
             <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
 
-        <ui:TitleBar Grid.Row="0"
+        <ui:TitleBar x:Name="MainTitleBar" Grid.Row="0"
                      Title="MagiDesk"
                      ShowMaximize="True"
                      Background="Transparent"

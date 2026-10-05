@@ -17,6 +17,7 @@ namespace MagiDesk
         public MainWindow()
         {
             InitializeComponent();
+            InitializeTitleBarHover();
 
             SystemThemeWatcher.Watch(this, WindowBackdropType.Mica, updateAccents: true);
 

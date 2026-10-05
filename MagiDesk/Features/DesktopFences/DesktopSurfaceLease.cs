@@ -29,7 +29,7 @@ internal sealed class DesktopSurfaceLease : IDisposable
         {
             var executable = Environment.ProcessPath;
             if (string.IsNullOrEmpty(executable) || System.IO.Path.GetFileNameWithoutExtension(executable).Equals("dotnet", StringComparison.OrdinalIgnoreCase))
-                throw new InvalidOperationException("统一桌面实验需要通过 MagiDesk.exe 启动。");
+                throw new InvalidOperationException("桌面盒子需要通过 MagiDesk.exe 启动。");
             var start = new ProcessStartInfo(executable)
             { UseShellExecute = false, CreateNoWindow = true, WindowStyle = ProcessWindowStyle.Hidden };
             start.ArgumentList.Add(Argument);

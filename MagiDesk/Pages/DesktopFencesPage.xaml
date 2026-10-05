@@ -17,8 +17,8 @@
                         <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
                     <StackPanel Margin="0,0,24,0">
-                        <TextBlock Text="桌面盒子（开发中）" FontSize="28" FontWeight="SemiBold"/>
-                        <TextBlock Text="Fences / Coodesker 式桌面整理。使用独立盒子整理文件或映射文件夹，可试用统一桌面显示。" TextWrapping="Wrap"
+                        <TextBlock Text="桌面盒子" FontSize="28" FontWeight="SemiBold"/>
+                        <TextBlock Text="分类管理桌面内容，使用盒子收纳文件或映射文件夹，文件路径保持不变。" TextWrapping="Wrap"
                                    Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="0,2,0,0"/>
                     </StackPanel>
                     <StackPanel Grid.Column="1" VerticalAlignment="Center" HorizontalAlignment="Center">
@@ -31,10 +31,6 @@
 
                 <ui:Card HorizontalAlignment="Stretch" Padding="18,16" Margin="0,0,0,12">
                     <StackPanel>
-                        <ui:ToggleSwitch x:Name="TsUnifiedSurface" Content="统一桌面显示（实验）"
-                                         Checked="UnifiedSurface_Changed" Unchecked="UnifiedSurface_Changed"/>
-                        <TextBlock Text="启用盒子后，未归类文件显示在主屏桌面，已归类文件仅显示在盒子内，文件路径不变。关闭此开关或退出软件可恢复系统图标。回收站、此电脑等图标跟随系统桌面图标设置。首版按列排列，不保留原图标坐标，暂不支持多屏分配和自由摆放。"
-                                   TextWrapping="Wrap" Margin="0,4,0,14"/>
                         <TextBlock Text="临时唤出盒子" FontWeight="SemiBold"/>
                         <TextBlock Text="启用桌面盒子后，按热键临时显示在应用上方。再次按热键、Esc 或切换到其他应用后回到桌面。方向键选择，Tab 切换盒子，Enter 打开。"
                                    TextWrapping="Wrap" Margin="0,4,0,10"/>

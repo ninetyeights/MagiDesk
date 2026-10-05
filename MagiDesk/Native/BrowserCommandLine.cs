@@ -4,6 +4,30 @@ namespace MagiDesk.Native;
 
 internal static class BrowserCommandLine
 {
+    internal const string AudioPreset = "--disable-features=ChromeWideEchoCancellation,WebRtcAllowInputVolumeAdjustment";
+
+    internal static string ApplyAudioPreset(string text)
+    {
+        var remaining = new List<string>();
+        var features = new List<string>();
+        const string prefix = "--disable-features=";
+        foreach (string arg in Parse(text))
+        {
+            if (arg.StartsWith(prefix, StringComparison.Ordinal))
+                features.AddRange(arg[prefix.Length..].Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+            else if (arg == "--disable-features")
+                throw new ArgumentException("请将现有禁用功能写为 --disable-features=功能名称 后再应用预设。");
+            else remaining.Add(arg);
+        }
+        features.AddRange(AudioPreset[prefix.Length..].Split(','));
+        remaining.Add(prefix + string.Join(",", features.Distinct(StringComparer.Ordinal)));
+        string result = string.Join(" ", remaining.Select(arg =>
+            arg.Length > 0 && !arg.Any(c => char.IsWhiteSpace(c) || c == '"')
+                ? arg : MagiDesk.Features.ProfileDock.ChromeLauncher.Quote(arg)));
+        Parse(result);
+        return result;
+    }
+
     [DllImport("shell32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern IntPtr CommandLineToArgvW(string commandLine, out int count);
     [DllImport("kernel32.dll")]

@@ -9,8 +9,46 @@ public partial class DockProjectManager
 {
     private bool _importingApplications;
 
+    private async void DiscoverEmulators_Click(object sender, RoutedEventArgs e)
+    {
+        if (_importingApplications || !CanEditLayout()) return;
+        _importingApplications = true;
+        ApplicationStatus.Text = "正在识别 BlueStacks / MSI App Player 实例…";
+        try
+        {
+            var existing = Config.DockApplications.Select(a => (a.LaunchPath, a.ExecutablePath)).ToArray();
+            var result = await Task.Run(() =>
+            {
+                DockApplicationRuntime.RefreshShortcutInstances(existing);
+                return EmulatorInstanceDiscovery.Discover();
+            });
+            if (!CanEditLayout()) return;
+            int added = 0;
+            foreach (var app in result.Applications)
+                if (EmulatorInstanceDiscovery.Add(Config.DockApplications, app)) added++;
+            if (added > 0) Config.Save();
+            RefreshContent();
+            if (added > 0)
+            {
+                SearchBox.Clear();
+                TypeFilter.SelectedItem = TypeFilter.Items.Cast<DockLibraryCategory>().FirstOrDefault(c => c.Id == "app");
+            }
+            ApplicationStatus.Text = result.Applications.Count == 0
+                ? "未发现实例。支持已安装的 BlueStacks 5 / MSI App Player 5，请先在模拟器中创建实例。"
+                : $"发现 {result.Applications.Count} 个实例，新增 {added} 个，跳过 {result.Applications.Count - added} 个已有实例。勾选后可加入栏目。";
+            if (result.Errors.Count > 0) ApplicationStatus.Text += "\n" + string.Join("\n", result.Errors.Distinct());
+        }
+        catch (Exception ex)
+        {
+            MagiDesk.Infrastructure.DiagnosticLog.Write($"DOCK-APPS emulator discovery failed: {ex.GetType().Name}");
+            ApplicationStatus.Text = "识别失败，请稍后重试。";
+        }
+        finally { _importingApplications = false; }
+    }
+
     private async void AddApplication_Click(object sender, RoutedEventArgs e)
     {
+        if (!CanEditLayout()) return;
         var dialog = new Microsoft.Win32.OpenFileDialog
         {
             Title = "添加 Dock 应用", Filter = "应用或快捷方式|*.exe;*.lnk", Multiselect = true,
@@ -20,7 +58,7 @@ public partial class DockProjectManager
 
     private void Applications_DragOver(object sender, DragEventArgs e)
     {
-        e.Effects = !_importingApplications && e.Data.GetData(DataFormats.FileDrop) is string[] paths &&
+        e.Effects = !Config.BrowserDockLocked && !_importingApplications && e.Data.GetData(DataFormats.FileDrop) is string[] paths &&
             paths.Length > 0 && paths.All(DockApplicationRuntime.IsSupportedPath)
             ? DragDropEffects.Copy : DragDropEffects.None;
         e.Handled = true;
@@ -34,7 +72,7 @@ public partial class DockProjectManager
 
     private async Task AddApplications(string[] paths)
     {
-        if (_importingApplications) return;
+        if (_importingApplications || !CanEditLayout()) return;
         _importingApplications = true;
         ApplicationStatus.Text = "正在读取应用…";
         try
@@ -54,6 +92,7 @@ public partial class DockProjectManager
                 }
                 return (entries, errors);
             });
+            if (!CanEditLayout()) return;
             int added = 0;
             var addedKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var app in result.entries)
@@ -78,6 +117,7 @@ public partial class DockProjectManager
 
     private async void ChangeApplicationIcon(DockApplication app)
     {
+        if (!CanEditLayout()) return;
         var dialog = new Microsoft.Win32.OpenFileDialog
         {
             Title = "选择应用图标", Filter = "图标或图片|*.ico;*.png;*.jpg;*.jpeg;*.bmp",
@@ -85,7 +125,7 @@ public partial class DockProjectManager
         if (dialog.ShowDialog() != true) return;
         DockApplicationIcons.Invalidate(dialog.FileName);
         var image = await DockApplicationIcons.LoadAsync(dialog.FileName);
-        if (!AppConfig.Current.DockApplications.Contains(app)) return;
+        if (!CanEditLayout() || !AppConfig.Current.DockApplications.Contains(app)) return;
         if (image is null)
         {
             ApplicationStatus.Text = "无法读取图片，请选择有效的 ICO、PNG、JPG 或 BMP 文件。";
@@ -100,10 +140,11 @@ public partial class DockProjectManager
 
     private void EditApplicationIcon(DockApplication app)
     {
+        if (!CanEditLayout()) return;
         var draft = app.IconStyle?.Copy() ?? new AvatarStyle();
         var editor = new MagiDesk.Features.BrowserBadges.AvatarTextEditorWindow(app.Name, app.Name, draft, maxTextLength: 0)
         { Owner = Window.GetWindow(this) };
-        if (editor.ShowDialog() != true || !AppConfig.Current.DockApplications.Contains(app)) return;
+        if (editor.ShowDialog() != true || !CanEditLayout() || !AppConfig.Current.DockApplications.Contains(app)) return;
         app.IconStyle = editor.WasReset ? null : draft;
         app.IconPath = null;
         AppConfig.Current.Save();

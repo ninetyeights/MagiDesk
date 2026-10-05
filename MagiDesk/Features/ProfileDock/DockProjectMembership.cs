@@ -19,6 +19,7 @@ internal static class DockProjectMembership
 
     internal static int Apply(AppConfig config, DockProjectTarget target, IEnumerable<string> keys, bool remove)
     {
+        if (config.BrowserDockLocked) return 0;
         // A picker can outlive a configuration refresh; never mutate a stale target.
         if (!DockCollections.All(config).Contains(target.Collection) || !target.Collection.Segments.Contains(target.Column)) return 0;
         if (!remove) return DockCollections.AddItems(config, target.Collection, target.Column, keys);

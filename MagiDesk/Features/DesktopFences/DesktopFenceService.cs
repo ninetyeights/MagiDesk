@@ -143,7 +143,6 @@ public sealed partial class DesktopFenceService : IDisposable
     {
         if (_disposed) return;
         bool enabled = AppConfig.Current.DesktopFencesEnabled;
-        if (_active && _unifiedSurface != AppConfig.Current.DesktopUnifiedSurface) Deactivate();
         if (enabled && !_active) Activate();
         else if (!enabled && _active) Deactivate();
         ConfigureHotkey();
@@ -221,7 +220,6 @@ public sealed partial class DesktopFenceService : IDisposable
         _active = true;
         _startupWatch.Restart();
         _menuPrewarmQueued = false;
-        _unifiedSurface = AppConfig.Current.DesktopUnifiedSurface;
         if (DesktopTabMigration.ConvertToBoxes(AppConfig.Current.DesktopBoxes))
             AppConfig.Current.Save();
         EnsureUnsorted();
@@ -568,6 +566,7 @@ public sealed partial class DesktopFenceService : IDisposable
             }
             if (DesktopBoxDefaults.AssignInitialContents(cfg, items, _membershipSnapshot)) cfg.Save();
             if (_unifiedSurface) RenderDesktopSurface(items, t.Result.Positions);
+            if (!_active) return; // Surface failure deactivates and restores Explorer.
             foreach (var box in cfg.DesktopBoxes)
             {
                 if (box.FolderPath is not null) continue;

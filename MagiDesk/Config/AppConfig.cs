@@ -182,15 +182,13 @@ public sealed class AppConfig
     /// first drag-drop reorder of an ungrouped profile so existing setups
     /// keep their catalog-based ordering until the user actually reorders.</summary>
     public List<string> BrowserDockUngroupedOrder { get; set; } = new();
-    /// <summary>When true, drag-drop reordering and group-membership changes
-    /// from the dock context menu are disabled. Avatar / visibility / close
-    /// actions remain available — the lock only freezes layout, not function.</summary>
+    /// <summary>Prevent Dock content edits while retaining browsing, activation and collection switching.</summary>
+    // Content layout lock (legacy JSON name retained); independent of floating position.
     public bool BrowserDockLocked { get; set; } = false;
 
     // ---- Desktop fences (custom-rendered desktop icon boxes) -------------
-    /// <summary>Show desktop boxes without changing system desktop icons.</summary>
+    /// <summary>Show unified desktop boxes, temporarily replacing system desktop icons.</summary>
     public bool DesktopFencesEnabled { get; set; } = false;
-    public bool DesktopUnifiedSurface { get; set; } = false;
     public bool DesktopDefaultBoxInitialized { get; set; }
     public bool DesktopInitialClassificationInitialized { get; set; }
     public string? DesktopInitialClassificationBoxId { get; set; }

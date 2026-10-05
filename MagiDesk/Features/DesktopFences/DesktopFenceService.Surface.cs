@@ -8,7 +8,8 @@ namespace MagiDesk.Features.DesktopFences;
 
 public sealed partial class DesktopFenceService
 {
-    private bool _unifiedSurface;
+    // Desktop presentation is fixed; retained internally for the recovery paths.
+    private readonly bool _unifiedSurface = true;
     private readonly Dictionary<string, FenceBoxWindow> _desktopSurfaces = new();
     private IReadOnlyList<DesktopItem>? _surfaceItems;
     private IReadOnlyList<DesktopMonitor> _desktopMonitors = [];
@@ -130,7 +131,9 @@ public sealed partial class DesktopFenceService
         catch (Exception ex)
         {
             DiagnosticLog.Write($"DESKTOP-SURFACE failed: {ex}\n");
-            AppConfig.Current.DesktopUnifiedSurface = false;
+            // Restore Explorer immediately, even if persisting the disabled state fails.
+            Deactivate();
+            AppConfig.Current.DesktopFencesEnabled = false;
             AppConfig.Current.Save();
         }
     }

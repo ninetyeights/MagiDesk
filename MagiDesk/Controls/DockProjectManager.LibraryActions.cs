@@ -16,6 +16,7 @@ public partial class DockProjectManager
 
     private void ShowTargetPicker(FrameworkElement anchor, string[] keys, bool remove)
     {
+        if (!CanEditLayout()) return;
         if (keys.Length == 0) return;
         if (_targetPopup is not null) _targetPopup.IsOpen = false;
         var popup = new System.Windows.Controls.Primitives.Popup
@@ -34,6 +35,7 @@ public partial class DockProjectManager
         picker.PreviewKeyDown += (_, e) => { if (e.Key == System.Windows.Input.Key.Escape) { popup.IsOpen = false; e.Handled = true; } };
         picker.Confirmed += target =>
         {
+            if (!CanEditLayout()) { popup.IsOpen = false; return; }
             int count = DockProjectMembership.Apply(Config, target, keys, remove);
             popup.IsOpen = false;
             Config.Save(); RefreshContent();
@@ -53,6 +55,7 @@ public partial class DockProjectManager
 
     private void RemoveRowMembership_Click(object sender, RoutedEventArgs e)
     {
+        if (!CanEditLayout()) return;
         if (sender is DockMembershipStrip { DataContext: ProjectRow row, RequestedTarget: { } target })
         {
             DockProjectMembership.Apply(Config, target, new[] { row.Key }, remove: true);
@@ -69,6 +72,7 @@ public partial class DockProjectManager
         {
             var entry = new MenuItem { Header = target.Label };
             var remove = new MenuItem { Header = "移除此归属" };
+            DockLayoutLock.Protect(menu, remove);
             remove.Click += (_, _) =>
             {
                 DockProjectMembership.Apply(Config, target, new[] { row.Key }, remove: true);
@@ -78,6 +82,7 @@ public partial class DockProjectManager
             foreach (var column in target.Collection.Segments.Where(c => c != target.Column))
             {
                 var move = new MenuItem { Header = $"移到栏目：{column.Name}" };
+                DockLayoutLock.Protect(menu, move);
                 move.Click += (_, _) =>
                 {
                     DockProjectMembership.Apply(Config, new(target.Collection, column), new[] { row.Key }, remove: false);
@@ -93,6 +98,7 @@ public partial class DockProjectManager
 
     private void DeleteLibraryApplications_Click(object sender, RoutedEventArgs e)
     {
+        if (!CanEditLayout()) return;
         var applications = Config.DockApplications.Where(a => _librarySelection.Contains(DockItem.ApplicationKey(a.Id))).ToList();
         if (applications.Count == 0)
         {

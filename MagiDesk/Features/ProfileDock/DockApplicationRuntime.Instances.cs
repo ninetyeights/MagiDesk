@@ -16,6 +16,11 @@ internal static partial class DockApplicationRuntime
     internal static bool IsInstancePlayer(string path)
         => Path.GetFileName(path).Equals("HD-Player.exe", StringComparison.OrdinalIgnoreCase);
 
+    internal static string? ResolvedInstance(MagiDesk.Config.DockApplication app)
+        => Path.GetExtension(app.LaunchPath).Equals(".lnk", StringComparison.OrdinalIgnoreCase) &&
+           ShortcutInstances.TryGetValue(app.LaunchPath, out var shortcut) && shortcut.Valid
+            ? shortcut.Instance : app.InstanceName;
+
     internal static string? ExtractInstance(string arguments)
     {
         var match = Regex.Match(arguments, "(?:^|\\s)--instance(?:=|\\s+)(?:\"([^\"]+)\"|([^\\s\"]+))", RegexOptions.IgnoreCase);

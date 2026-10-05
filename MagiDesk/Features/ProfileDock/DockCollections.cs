@@ -65,6 +65,7 @@ internal static class DockCollections
 
     internal static bool ReorderCollection(AppConfig cfg, DockCollection source, DockCollection target, bool after)
     {
+        if (cfg.BrowserDockLocked) return false;
         var ordered = All(cfg).ToList();
         if (source == target || !ordered.Contains(source) || !ordered.Contains(target)) return false;
         ordered.Remove(source);
@@ -81,6 +82,7 @@ internal static class DockCollections
 
     internal static bool DeleteCollection(AppConfig cfg, DockCollection collection)
     {
+        if (cfg.BrowserDockLocked) return false;
         if (All(cfg).Count() <= 1) return false;
         var owner = cfg.DockNavigationGroups.FirstOrDefault(g => g.Collections.Contains(collection));
         if (owner is null) return false;
@@ -97,6 +99,7 @@ internal static class DockCollections
 
     internal static int AddItems(AppConfig cfg, DockCollection collection, BrowserDockGroup segment, IEnumerable<string> keys)
     {
+        if (cfg.BrowserDockLocked) return 0;
         if (!All(cfg).Contains(collection) || !collection.Segments.Contains(segment)) return 0;
         var validApps = cfg.DockApplications.Select(a => DockItem.ApplicationKey(a.Id)).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var incoming = keys.Where(k => !string.IsNullOrWhiteSpace(k) &&
