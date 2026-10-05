@@ -42,18 +42,6 @@
                     <TextBlock x:Name="ReleaseNotes" TextWrapping="Wrap" MaxHeight="240" TextTrimming="CharacterEllipsis"/>
                 </StackPanel>
             </ui:Card>
-            <ui:Card HorizontalAlignment="Stretch" Padding="18,16">
-                <StackPanel>
-                    <TextBlock Text="已实现的工具" FontWeight="SemiBold" Margin="0,0,0,8"/>
-                    <TextBlock Text="• 窗口拖动 — AltSnap 风格的快速移动 / 缩放"
-                               Foreground="{DynamicResource TextFillColorSecondaryBrush}"
-                               Margin="0,2"/>
-                    <TextBlock Text="更多工具陆续加入..."
-                               Foreground="{DynamicResource TextFillColorTertiaryBrush}"
-                               FontStyle="Italic"
-                               Margin="0,12,0,2"/>
-                </StackPanel>
-            </ui:Card>
             </StackPanel>
         </Grid>
     </ScrollViewer>
