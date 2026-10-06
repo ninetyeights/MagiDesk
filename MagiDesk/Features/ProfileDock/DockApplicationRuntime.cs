@@ -25,7 +25,7 @@ internal static partial class DockApplicationRuntime
         }
         finally { NativeMethods.CloseHandle(process); }
     }
-    internal sealed record Window(IntPtr Handle, uint ProcessId, string ExecutablePath, string? InstanceName = null);
+    internal sealed record Window(IntPtr Handle, uint ProcessId, string ExecutablePath, string? InstanceName = null, string? DisplayName = null);
 
     internal static bool IsSupportedPath(string path)
         => Path.IsPathFullyQualified(path) &&
@@ -113,6 +113,7 @@ internal static partial class DockApplicationRuntime
     internal static bool Matches(DockApplication app, Window window)
     {
         if (!SameApplicationExecutable(app.ExecutablePath, window.ExecutablePath)) return false;
+        if (app.UnresolvedWindowHandle is { } handle) return window.Handle.ToInt64() == handle;
         if (!IsInstancePlayer(app.ExecutablePath)) return true;
         string? instance = app.InstanceName;
         if (Path.GetExtension(app.LaunchPath).Equals(".lnk", StringComparison.OrdinalIgnoreCase))
@@ -120,7 +121,7 @@ internal static partial class DockApplicationRuntime
             if (!ShortcutInstances.TryGetValue(app.LaunchPath, out var shortcut) || !shortcut.Valid) return false;
             instance = shortcut.Instance;
         }
-        return string.IsNullOrEmpty(instance) || string.Equals(instance, window.InstanceName, StringComparison.OrdinalIgnoreCase);
+        return !string.IsNullOrEmpty(instance) && string.Equals(instance, window.InstanceName, StringComparison.OrdinalIgnoreCase);
     }
 
     internal static void Launch(DockApplication entry)
@@ -130,8 +131,18 @@ internal static partial class DockApplicationRuntime
 
     internal static ProcessStartInfo CreateStartInfo(DockApplication entry)
     {
+        if (entry.UnresolvedWindowHandle is not null)
+            throw new InvalidOperationException("尚未识别模拟器实例，无法启动新实例。");
         if (!IsSupportedPath(entry.LaunchPath) || !File.Exists(entry.LaunchPath))
             throw new InvalidOperationException("应用入口已失效，请移除后重新添加。");
+        if (Path.GetExtension(entry.LaunchPath).Equals(".exe", StringComparison.OrdinalIgnoreCase) &&
+            PackagedApplicationLaunch.Resolve(entry.LaunchPath) is { } appId)
+        {
+            var packaged = new ProcessStartInfo(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "explorer.exe"))
+            { UseShellExecute = false };
+            packaged.ArgumentList.Add(@"shell:AppsFolder\" + appId);
+            return packaged;
+        }
         // Launch the .lnk itself, retaining arguments, working directory and Shell flags.
         var info = new ProcessStartInfo(entry.LaunchPath) { UseShellExecute = true };
         // Entries pinned directly from running players have no shortcut to supply --instance.
@@ -168,7 +179,12 @@ internal static partial class DockApplicationRuntime
                 if (path is null) inaccessible++;
                 paths[pid] = path;
             }
-            if (!string.IsNullOrEmpty(path)) result.Add(new Window(hwnd, pid, path));
+            if (!string.IsNullOrEmpty(path))
+            {
+                var title = new System.Text.StringBuilder(512);
+                if (IsInstancePlayer(path)) NativeMethods.GetWindowText(hwnd, title, title.Capacity);
+                result.Add(new Window(hwnd, pid, path, DisplayName: title.Length > 0 ? title.ToString() : null));
+            }
             return true;
         }, IntPtr.Zero);
         string summary = $"windows={result.Count} ownedSkipped={owned} toolSkipped={tools} pathUnavailable={inaccessible} players={result.Count(w => Path.GetFileName(w.ExecutablePath).Equals("HD-Player.exe", StringComparison.OrdinalIgnoreCase))}";

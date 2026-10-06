@@ -23,7 +23,7 @@ internal static partial class DockApplicationRuntime
 
     internal static string? ExtractInstance(string arguments)
     {
-        var match = Regex.Match(arguments, "(?:^|\\s)--instance(?:=|\\s+)(?:\"([^\"]+)\"|([^\\s\"]+))", RegexOptions.IgnoreCase);
+        var match = Regex.Match(arguments, "(?:^|\\s)\"?--instance(?:=|\"?\\s+)(?:\"([^\"]+)\"|([^\\s\"]+))", RegexOptions.IgnoreCase);
         return match.Success ? (match.Groups[1].Success ? match.Groups[1].Value : match.Groups[2].Value) : null;
     }
 

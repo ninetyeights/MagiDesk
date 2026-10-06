@@ -14,18 +14,37 @@ namespace MagiDesk.Pages
             InitializeComponent();
             PullFromConfig();
 
-            AppConfig.Changed += OnConfigChanged;
-            Unloaded += (_, _) => AppConfig.Changed -= OnConfigChanged;
+            Loaded += (_, _) =>
+            {
+                AppConfig.Changed += OnConfigChanged;
+                AppConfig.SaveFailed += OnSaveFailed;
+                PullFromConfig();
+            };
+            Unloaded += (_, _) =>
+            {
+                AppConfig.Changed -= OnConfigChanged;
+                AppConfig.SaveFailed -= OnSaveFailed;
+            };
         }
 
         private void OnConfigChanged()
-            => Dispatcher.BeginInvoke(new Action(PullFromConfig));
+            => Dispatcher.BeginInvoke(new Action(() => { if (IsLoaded) PullFromConfig(); }));
+
+        private void OnSaveFailed(string error)
+            => Dispatcher.BeginInvoke(new Action(() => { if (IsLoaded) RefreshSaveStatus(); }));
+
+        private void RefreshSaveStatus()
+        {
+            bool failed = AppConfig.LastSaveError is not null;
+            TxtSaveStatus.Visibility = failed ? Visibility.Collapsed : Visibility.Visible;
+            SaveFailurePanel.Visibility = failed ? Visibility.Visible : Visibility.Collapsed;
+            TxtSaveError.Text = AppConfig.LastSaveError ?? "";
+        }
 
         private void PullFromConfig()
         {
             _loading = true;
             var cfg = AppConfig.Current;
-            TxtSaveStatus.Text = AppConfig.LastSaveError is null ? "配置自动保存，并保留上次版本和每日备份。" : "有设置尚未保存：" + AppConfig.LastSaveError;
 
             // Auto-start: registry is the source of truth — if the user removed
             // it via Task Manager, reflect that here and rewrite the config.
@@ -39,13 +58,14 @@ namespace MagiDesk.Pages
 
             TsTray.IsChecked = cfg.TrayIconEnabled;
             RefreshTraySub();
+            RefreshSaveStatus();
             _loading = false;
         }
 
         private void RetrySave_Click(object sender, RoutedEventArgs e)
         {
-            bool saved = AppConfig.Current.TrySave();
-            TxtSaveStatus.Text = saved ? "配置已保存。" : "保存失败：" + AppConfig.LastSaveError;
+            if (AppConfig.Current.TrySave()) TxtSaveStatus.Text = "已保存。后续设置会自动保存，无需手动操作。";
+            RefreshSaveStatus();
         }
 
         private void AutoStart_Changed(object sender, RoutedEventArgs e)

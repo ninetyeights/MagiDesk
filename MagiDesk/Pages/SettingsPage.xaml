@@ -65,8 +65,15 @@
                 <ui:Card HorizontalAlignment="Stretch" Padding="18,16" Margin="0,0,0,12">
                     <StackPanel>
                         <TextBlock Text="配置保存" FontWeight="SemiBold"/>
-                        <TextBlock x:Name="TxtSaveStatus" TextWrapping="Wrap" Margin="0,6,0,8"/>
-                        <Button Content="重试保存" Click="RetrySave_Click" HorizontalAlignment="Left"/>
+                        <TextBlock x:Name="TxtSaveStatus" Text="设置会自动保存，无需手动操作。" TextWrapping="Wrap" Margin="0,6,0,0"/>
+                        <StackPanel x:Name="SaveFailurePanel" Visibility="Collapsed" Margin="0,8,0,0">
+                            <ui:InfoBar IsOpen="True" IsClosable="False" Severity="Warning"
+                                        Title="部分设置未保存" Message="退出后可能丢失，请重试保存。"/>
+                            <Expander Header="查看详情" Margin="0,8,0,8">
+                                <TextBlock x:Name="TxtSaveError" TextWrapping="Wrap"/>
+                            </Expander>
+                            <Button Content="重试保存" Click="RetrySave_Click" HorizontalAlignment="Left"/>
+                        </StackPanel>
                     </StackPanel>
                 </ui:Card>
 

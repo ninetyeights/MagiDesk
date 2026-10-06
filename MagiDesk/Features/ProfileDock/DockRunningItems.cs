@@ -26,10 +26,13 @@ internal static class DockRunningItems
             else
             {
                 if (string.IsNullOrWhiteSpace(window.ExecutablePath)) continue;
+                bool player = DockApplicationRuntime.IsInstancePlayer(window.ExecutablePath);
+                bool unresolved = player && string.IsNullOrEmpty(window.InstanceName);
                 item = new DockItem(new DockApplication
                 {
-                    Id = "running:" + window.ExecutablePath.ToUpperInvariant() + (window.InstanceName is null ? "" : ":" + window.InstanceName.ToUpperInvariant()),
-                    Name = Path.GetFileNameWithoutExtension(window.ExecutablePath) + (window.InstanceName is null ? "" : " · " + window.InstanceName),
+                    Id = "running:" + window.ExecutablePath.ToUpperInvariant() + (unresolved ? ":window:" + window.Handle.ToInt64() : window.InstanceName is null ? "" : ":" + window.InstanceName.ToUpperInvariant()),
+                    Name = (player && !string.IsNullOrWhiteSpace(window.DisplayName) ? window.DisplayName : Path.GetFileNameWithoutExtension(window.ExecutablePath) + (window.InstanceName is null ? "" : " · " + window.InstanceName)) + (unresolved ? "（实例未识别）" : ""),
+                    UnresolvedWindowHandle = unresolved ? window.Handle.ToInt64() : null,
                     InstanceName = window.InstanceName,
                     LaunchPath = window.ExecutablePath, ExecutablePath = window.ExecutablePath,
                 }) { RunningOnly = true };

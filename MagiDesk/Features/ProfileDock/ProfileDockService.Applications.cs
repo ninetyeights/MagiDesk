@@ -188,7 +188,7 @@ public sealed partial class ProfileDockService
         }
         catch (Exception ex)
         {
-            DiagnosticLog.Write($"DOCK-APPS click failed: {ex.GetType().Name}");
+            DiagnosticLog.Write($"DOCK-APPS click failed: id={app.Id} type={ex.GetType().Name} hr=0x{ex.HResult:X8} native={(ex as System.ComponentModel.Win32Exception)?.NativeErrorCode}\n");
             if (!_disposed && anchor.IsVisible)
             {
                 var menu = new ContextMenu { PlacementTarget = anchor };

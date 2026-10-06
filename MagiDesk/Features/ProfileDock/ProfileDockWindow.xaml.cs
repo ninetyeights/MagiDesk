@@ -1032,7 +1032,9 @@ public partial class ProfileDockWindow : Window
             g.ProfileDirs.Contains(key, StringComparer.OrdinalIgnoreCase));
         // Lock protects explicit content edits as well as drag sorting.
         var moveTo = new MenuItem { Header = runningApplication is null ? "移动到栏目" : "固定到栏目" };
-        DockLayoutLock.Protect(menu, moveTo, refreshOnOpen: refreshOnOpen);
+        bool resolved = runningApplication?.UnresolvedWindowHandle is null;
+        if (!resolved) moveTo.Header = "实例未识别，暂不能固定";
+        DockLayoutLock.Protect(menu, moveTo, available: resolved, refreshOnOpen: refreshOnOpen);
         void MoveTo(BrowserDockGroup target)
         {
             if (DockLayoutLock.IsLocked) return;

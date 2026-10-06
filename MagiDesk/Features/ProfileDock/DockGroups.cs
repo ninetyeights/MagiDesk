@@ -58,13 +58,14 @@ internal static class DockGroups
 
     internal static bool PinRunningApplication(AppConfig cfg, DockApplication running, BrowserDockGroup target)
     {
-        if (cfg.BrowserDockLocked) return false;
+        if (cfg.BrowserDockLocked || running.UnresolvedWindowHandle is not null ||
+            (DockApplicationRuntime.IsInstancePlayer(running.ExecutablePath) && string.IsNullOrEmpty(running.InstanceName))) return false;
         // Validate the destination before importing; a stale menu must not create orphan entries.
         if (!DockCollections.Groups(cfg).Contains(target) ||
             !DockApplicationRuntime.IsSupportedPath(running.ExecutablePath)) return false;
         var app = cfg.DockApplications.FirstOrDefault(a =>
             DockApplicationRuntime.SameApplicationExecutable(a.ExecutablePath, running.ExecutablePath) &&
-            string.Equals(a.InstanceName, running.InstanceName, StringComparison.OrdinalIgnoreCase));
+            string.Equals(DockApplicationRuntime.ResolvedInstance(a), running.InstanceName, StringComparison.OrdinalIgnoreCase));
         if (app is null)
         {
             app = new DockApplication

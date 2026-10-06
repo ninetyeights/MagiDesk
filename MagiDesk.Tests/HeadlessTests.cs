@@ -671,6 +671,24 @@ internal static class HeadlessTests
 
     private static void DockApplicationMatching()
     {
+        Check(DockApplicationRuntime.ExtractInstance("\"HD-Player.exe\" \"--instance\" \"Rvc64_6\"") == "Rvc64_6", "quoted instance switch missed");
+        Check(DockApplicationRuntime.ExtractInstance("\"--instance=Rvc64_15\"") == "Rvc64_15", "quoted equals switch missed");
+        Check(DockApplicationRuntime.ExtractInstance("--instance-extra wrong") is null, "unrelated switch accepted");
+        var players = new[] {
+            new DockApplicationRuntime.Window(new IntPtr(101), 10, @"C:\BlueStacks\HD-Player.exe", DisplayName: "First"),
+            new DockApplicationRuntime.Window(new IntPtr(102), 20, @"C:\BlueStacks\HD-Player.exe", DisplayName: "Second"),
+        };
+        var unresolved = DockRunningItems.Build(players, Array.Empty<DockApplication>(), new Dictionary<IntPtr, string>(), Array.Empty<ChromeProfile>(), new HashSet<string>(), Array.Empty<DockItem>());
+        Check(unresolved.Count == 2 && DockApplicationRuntime.Match(unresolved[0].Application!, players).Count == 1, "unknown instances merged in icons or previews");
+        var resolvedPlayers = players.Select((w, i) => w with { InstanceName = "Rvc64_" + i }).ToArray();
+        var resolvedItems = DockRunningItems.Build(resolvedPlayers, Array.Empty<DockApplication>(), new Dictionary<IntPtr, string>(), Array.Empty<ChromeProfile>(), new HashSet<string>(), unresolved);
+        Check(resolvedItems.Count == 2 && resolvedItems.All(i => i.Application!.UnresolvedWindowHandle is null), "resolved instances kept fallback state");
+        var instanceConfig = new AppConfig();
+        var instanceGroup = new BrowserDockGroup { Name = "Players" };
+        DockCollections.Groups(instanceConfig).Add(instanceGroup);
+        Check(!DockGroups.PinRunningApplication(instanceConfig, unresolved[0].Application!, instanceGroup), "unresolved instance pinned as generic app");
+        Check(DockGroups.PinRunningApplication(instanceConfig, resolvedItems[0].Application!, instanceGroup), "resolved instance cannot be pinned");
+        Check(DockRunningItems.Build(resolvedPlayers, instanceConfig.DockApplications, new Dictionary<IntPtr, string>(), Array.Empty<ChromeProfile>(), new HashSet<string>(), resolvedItems).Count == 1, "pinning one instance hid other instances");
         var docker = new DockApplication { Name = "Docker", LaunchPath = @"C:\Docker\Docker Desktop.exe", ExecutablePath = @"C:\Docker\Docker Desktop.exe" };
         var dockerWindow = new DockApplicationRuntime.Window(new IntPtr(7), 70, @"C:\Docker\frontend\Docker Desktop.exe");
         Check(DockApplicationRuntime.Matches(docker, dockerWindow), "Docker launcher did not match frontend");
@@ -700,6 +718,23 @@ internal static class HeadlessTests
 
     private static void DockApplicationImport()
     {
+        var packageManifest = System.Xml.Linq.XDocument.Parse("""
+            <Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10">
+              <Identity Name="19059Raindrop.io.Raindrop.io" />
+              <Applications><Application Id="Raindrop.io.Raindrop.io" Executable="app\Raindrop.io.exe" /></Applications>
+            </Package>
+            """);
+        const string packageName = "19059Raindrop.io.Raindrop.io_5.7.3.0_x64__hghhavmbrcx2t";
+        Check(PackagedApplicationLaunch.ResolveManifest(packageManifest, packageName, @"app\Raindrop.io.exe") ==
+            "19059Raindrop.io.Raindrop.io_hghhavmbrcx2t!Raindrop.io.Raindrop.io", "packaged executable did not resolve registered identity");
+        Check(PackagedApplicationLaunch.ResolveManifest(packageManifest, packageName, @"other\Raindrop.io.exe") is null,
+            "same-name executable matched wrong package entry");
+        Check(PackagedApplicationLaunch.ResolveManifest(packageManifest, packageName.Replace("19059", "Other"), @"app\Raindrop.io.exe") is null,
+            "package identity mismatch accepted");
+        var packageApps = packageManifest.Root!.Elements().Last();
+        packageApps.Add(new System.Xml.Linq.XElement(packageApps.Elements().Single()));
+        Check(PackagedApplicationLaunch.ResolveManifest(packageManifest, packageName, @"app\Raindrop.io.exe") is null,
+            "ambiguous package entry guessed");
         var discovered = EmulatorInstanceDiscovery.Parse(new[]
         {
             "bst.instance.Pie64.display_name=\"中文账号\"",

@@ -18,6 +18,7 @@ public partial class ProfileDockWindow
             var app = item.Application!;
             var open = new MenuItem { Header = new TextBlock { Text = "打开 " + app.Name,
                 MaxWidth = 320, TextTrimming = TextTrimming.CharacterEllipsis } };
+            open.IsEnabled = app.UnresolvedWindowHandle is null;
             open.Click += async (_, _) =>
                 await RunApplicationMenuActionAsync(() => Task.Run(() => DockApplicationRuntime.Launch(app)));
             menu.Items.Add(open);

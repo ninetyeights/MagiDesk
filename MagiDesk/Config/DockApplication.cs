@@ -9,6 +9,8 @@ public sealed class DockApplication
     public string LaunchPath { get; set; } = "";
     public string ExecutablePath { get; set; } = "";
     public string? InstanceName { get; set; }
+    [System.Text.Json.Serialization.JsonIgnore]
+    public long? UnresolvedWindowHandle { get; set; }
     public string? IconPath { get; set; }
     public long IconRevision { get; set; }
     public AvatarStyle? IconStyle { get; set; }
