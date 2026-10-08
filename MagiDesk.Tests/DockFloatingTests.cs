@@ -59,16 +59,16 @@ internal static class DockFloatingTests
         Check(cfg.DockFloatingHideDelayMs == 150, "fresh settings default to short hide delay");
         var legacy = System.Text.Json.JsonSerializer.Deserialize<AppConfig>("{}")!;
         Check(legacy.DockFloatingHideDelayMs == 150, "older settings receive short hide delay");
-        Check(cfg.DockFloatingEdge == 2 && !cfg.DockFloatingAutoHide, "fresh configurations default to bottom placement");
+        Check(cfg.DockFloatingEdge == 1 && !cfg.DockFloatingAutoHide, "fresh configurations default to top placement");
         var before = BadgeSettingsSnapshot.CaptureDock(cfg);
-        cfg.DockFloatingEdge = 1;
+        cfg.DockFloatingEdge = 2;
         Check(before != BadgeSettingsSnapshot.CaptureDock(cfg), "edge change triggers dock refresh");
         before = BadgeSettingsSnapshot.CaptureDock(cfg); cfg.DockFloatingAutoHide = true;
         Check(before != BadgeSettingsSnapshot.CaptureDock(cfg), "auto-hide change triggers refresh");
         before = BadgeSettingsSnapshot.CaptureDock(cfg); cfg.DockFloatingHideDelayMs = 350;
         Check(before != BadgeSettingsSnapshot.CaptureDock(cfg), "hide delay change triggers refresh");
         var copy = System.Text.Json.JsonSerializer.Deserialize<AppConfig>(System.Text.Json.JsonSerializer.Serialize(cfg))!;
-        Check(copy.DockFloatingEdge == 1 && copy.DockFloatingAutoHide, "anchoring and hiding survive restart");
+        Check(copy.DockFloatingEdge == 2 && copy.DockFloatingAutoHide, "anchoring and hiding survive restart");
         Check(System.Text.Json.JsonSerializer.Deserialize<AppConfig>("{\"DockFloatingEdge\":0}")!.DockFloatingEdge == 0, "saved free placement is preserved");
         Check(copy.DockFloatingHideDelayMs == 350, "custom hide delay survives restart");
     }
