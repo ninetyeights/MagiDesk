@@ -29,7 +29,7 @@ The first release is a **public beta**, primarily targeting Windows 11 x64. Inst
 
 Installer upgrades and uninstall preserve your configuration and desktop files. Back up `%APPDATA%\MagiDesk` before upgrading. The installer currently has no Windows Authenticode signature; signed update manifests are a separate integrity mechanism.
 
-See the [installation and recovery guide](docs/RELEASE.md) (Chinese) for details.
+Back up `%APPDATA%\MagiDesk` before upgrading. Closing or disabling desktop boxes restores system desktop icons.
 
 
 ## Tools
@@ -132,4 +132,4 @@ MagiDesk.Tests/    # console integration tests
 
 The SDK is selected by `global.json`, and NuGet dependencies use checked-in lock files. `scripts/Publish-Release.ps1 -Installer` runs security checks and headless tests before packaging; installer builds require Inno Setup 6.3+.
 
-Pushing a matching version tag triggers GitHub Actions to build x64 and ARM64 packages and create a draft release. Installers are signed through an offline update manifest before publication. See the [signing guide](docs/UPDATE-SIGNING.md). Private signing keys are never uploaded to GitHub.
+Pushing a matching version tag triggers GitHub Actions to build x64 and ARM64 packages and create a draft release. Installers are signed through an offline update manifest before publication. Use `scripts/Update-Signing.ps1` for local signing and verification. Private signing keys are never uploaded to GitHub.

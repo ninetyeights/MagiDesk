@@ -36,7 +36,7 @@ New-Item -ItemType Directory -Path $stage, $archiveRoot -Force | Out-Null
 & dotnet build (Join-Path $repoRoot 'tools/UpdateSigning/UpdateSigning.csproj') -c Release "-p:BaseOutputPath=$buildRoot\" --nologo -v q
 if ($LASTEXITCODE -ne 0) { throw 'Signing tool build failed.' }
 & dotnet (Join-Path $buildRoot 'Release/net10.0/UpdateSigning.dll') check-keys $repoRoot
-if ($LASTEXITCODE -ne 0) { throw 'Configure a release public key before packaging. See docs/UPDATE-SIGNING.md.' }
+if ($LASTEXITCODE -ne 0) { throw 'Configure a release public key before packaging using scripts/Update-Signing.ps1.' }
 
 # Tests run on the build host; the published runtime may differ.
 & dotnet build (Join-Path $repoRoot 'MagiDesk.Tests/MagiDesk.Tests.csproj') -c Release "-p:BaseOutputPath=$buildRoot\" --nologo -v q
@@ -50,7 +50,6 @@ if ($LASTEXITCODE -ne 0) { throw 'Publish failed.' }
 foreach ($name in @('README.md', 'README.zh-CN.md', 'CHANGELOG.md')) {
     Copy-Item -LiteralPath (Join-Path $repoRoot $name) -Destination $payload
 }
-Copy-Item -LiteralPath (Join-Path $repoRoot 'docs/RELEASE.md') -Destination (Join-Path $payload 'RELEASE.md')
 # Preserve the actual dependency redistribution notices, including bundled fonts.
 $notices = Join-Path $payload 'ThirdPartyNotices'
 New-Item -ItemType Directory -Path $notices -Force | Out-Null

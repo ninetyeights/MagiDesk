@@ -609,7 +609,8 @@ internal sealed partial class FenceBoxWindow : Window
                 }
                 break;
             case 0x0046: // WM_WINDOWPOSCHANGING: stay below application windows.
-                if (!_peeking) DesktopWindowLayer.ConstrainPosition(lParam, _desktopLayerPlaced && !_changingDesktopOrder);
+                if (_desktopSurface || !_peeking)
+                    DesktopWindowLayer.ConstrainPosition(lParam, !_desktopSurface && _desktopLayerPlaced && !_changingDesktopOrder);
                 break;
             case 0x001A: case 0x031A: case 0x031E:
                 if (msg == 0x001A) QueueDesktopWorkArea();
@@ -2017,6 +2018,8 @@ internal sealed partial class FenceBoxWindow : Window
     internal void SetPeek(bool enabled)
     {
         if (_closed) return;
+        // Desktop icons never participate in temporarily summoned boxes.
+        if (_desktopSurface) enabled = false;
         _peeking = enabled;
         Topmost = enabled;
         if (enabled) RaiseForPeek("initial");
@@ -2025,7 +2028,7 @@ internal sealed partial class FenceBoxWindow : Window
 
     internal void RaiseForPeek(string reason)
     {
-        if (_closed || !_peeking || Hwnd == IntPtr.Zero) return;
+        if (_closed || _desktopSurface || !_peeking || Hwnd == IntPtr.Zero) return;
         {
             // Native desktop placement can clear WS_EX_TOPMOST without updating
             // WPF's cached Topmost value. Reassert it for EVERY summoned box.
@@ -2044,9 +2047,11 @@ internal sealed partial class FenceBoxWindow : Window
         _changingDesktopOrder = true;
         try
         {
-            NativeMethods.SetWindowPos(Hwnd, NativeMethods.HWND_BOTTOM, 0, 0, 0, 0,
+            bool placed = NativeMethods.SetWindowPos(Hwnd, NativeMethods.HWND_BOTTOM, 0, 0, 0, 0,
                 NativeConstants.SWP_NOMOVE | NativeConstants.SWP_NOSIZE | NativeConstants.SWP_NOACTIVATE);
-            _desktopLayerPlaced = true;
+            _desktopLayerPlaced = placed;
+            if (!placed)
+                MagiDesk.Infrastructure.DiagnosticLog.Write($"FENCE-LAYER bottom failed hwnd={Hwnd:X} desktop={_desktopSurface} error={System.Runtime.InteropServices.Marshal.GetLastWin32Error()}\n");
         }
         finally { _changingDesktopOrder = false; }
         if (!_desktopSurface) _service.KeepDesktopSurfaceBehind();

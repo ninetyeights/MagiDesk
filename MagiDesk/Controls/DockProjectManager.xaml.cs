@@ -472,7 +472,7 @@ public partial class DockProjectManager : UserControl
             AddMenu(menu, "重命名应用", () => { var name = AskName("应用名称", app.Name); if (name is not null) { app.Name = name; Config.Save(); } });
             AddMenu(menu, "自定义文字图标…", () => EditApplicationIcon(app));
             AddMenu(menu, "选择图标图片…", () => ChangeApplicationIcon(app));
-            AddMenu(menu, "恢复图标", () => { app.IconPath = null; app.IconStyle = null; Config.Save(); });
+            AddMenu(menu, "恢复图标", () => DockApplicationIconEditor.Reset(app));
             AddMenu(menu, "从项目库删除…", () =>
             {
                 if (!Confirm($"从项目库和所有 Dock 集合移除「{app.Name}」？不会卸载或关闭应用。")) return;

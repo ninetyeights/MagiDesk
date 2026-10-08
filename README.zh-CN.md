@@ -29,7 +29,7 @@ Fluent 风格的托盘应用里。
 
 安装版升级和卸载保留用户配置与真实桌面文件。升级前建议备份 `%APPDATA%\MagiDesk`。安装程序目前没有 Windows Authenticode 签名；应用内更新的清单签名属于独立的完整性验证机制。
 
-详细安装、升级及配置恢复方法见[发布使用说明](docs/RELEASE.md)。
+升级前建议备份 `%APPDATA%\MagiDesk`；关闭或禁用桌面盒子会恢复系统桌面图标。
 
 
 ## 工具
@@ -61,7 +61,7 @@ Chrome、Edge、Brave、Vivaldi、Opera。每个 profile 的头像、颜色、�
 浏览器账号与普通应用可混排在集合、栏目中；通过“内容管理”维护集合，通过“项目库”选择应用和浏览器账号。支持运行中应用、窗口预览、固定应用、横向滚动／换行、图标大小，以及悬浮和任务栏占位模式。
 
 ### 桌面盒子
-桌面文件归类、分页、映射目录、缩略图及临时唤出。统一桌面模式由应用显示桌面内容，并由恢复辅助进程保护系统图标恢复。首次使用请先了解[发布使用说明](docs/RELEASE.md)中的恢复方式。
+桌面文件归类、分页、映射目录、缩略图及临时唤出。统一桌面模式由应用显示桌面内容，并由恢复辅助进程保护系统图标恢复。关闭或禁用桌面盒子即可恢复系统桌面图标。
 
 ## 其他
 
@@ -90,7 +90,7 @@ Chrome、Edge、Brave、Vivaldi、Opera。每个 profile 的头像、颜色、�
 
 ## 构建与运行
 
-开发构建需要 **.NET 10 SDK** 与 Windows。自包含发布包无需另装运行时；首版验收范围见[发布使用说明](docs/RELEASE.md)。
+开发构建需要 **.NET 10 SDK** 与 Windows。自包含发布包无需另装运行时；已知限制见各版本发布说明。
 
 ```powershell
 dotnet run --project MagiDesk\MagiDesk.csproj
@@ -124,4 +124,4 @@ MagiDesk.Tests/    # 控制台集成测试
 
 SDK 由 `global.json` 指定，NuGet 依赖使用已提交的锁文件。发布脚本会先运行安全扫描和无窗口测试。
 
-推送与项目版本一致的标签后，GitHub Actions 自动构建 x64、ARM64 包并创建草稿 Release；对实际安装包在本机生成更新签名清单，验证后再公开发布。操作见[签名发布指南](docs/UPDATE-SIGNING.md)，私钥不上传到 GitHub。
+推送与项目版本一致的标签后，GitHub Actions 自动构建 x64、ARM64 包并创建草稿 Release；对实际安装包在本机生成更新签名清单，验证后再公开发布。使用 `scripts/Update-Signing.ps1` 在本机签名和验证，私钥不上传到 GitHub。

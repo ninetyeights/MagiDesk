@@ -24,7 +24,12 @@ internal static class DesktopWindowLayer
             position.Flags |= NativeConstants.SWP_NOZORDER;
             MagiDesk.Infrastructure.DiagnosticLog.Write($"FENCE-LAYER preserve hwnd={position.Hwnd} requestedAfter={position.InsertAfter}\n");
         }
-        else position.InsertAfter = NativeMethods.HWND_BOTTOM;
+        else
+        {
+            if (position.InsertAfter != NativeMethods.HWND_BOTTOM)
+                MagiDesk.Infrastructure.DiagnosticLog.Write($"FENCE-LAYER constrain-bottom hwnd={position.Hwnd:X} requestedAfter={position.InsertAfter:X} flags=0x{position.Flags:X}\n");
+            position.InsertAfter = NativeMethods.HWND_BOTTOM;
+        }
         Marshal.StructureToPtr(position, address, false);
     }
 }

@@ -118,35 +118,13 @@ public partial class DockProjectManager
     private async void ChangeApplicationIcon(DockApplication app)
     {
         if (!CanEditLayout()) return;
-        var dialog = new Microsoft.Win32.OpenFileDialog
-        {
-            Title = "选择应用图标", Filter = "图标或图片|*.ico;*.png;*.jpg;*.jpeg;*.bmp",
-        };
-        if (dialog.ShowDialog() != true) return;
-        DockApplicationIcons.Invalidate(dialog.FileName);
-        var image = await DockApplicationIcons.LoadAsync(dialog.FileName);
-        if (!CanEditLayout() || !AppConfig.Current.DockApplications.Contains(app)) return;
-        if (image is null)
-        {
-            ApplicationStatus.Text = "无法读取图片，请选择有效的 ICO、PNG、JPG 或 BMP 文件。";
-            return;
-        }
-        app.IconPath = dialog.FileName;
-        app.IconStyle = null;
-        app.IconRevision++; // Re-selecting an edited image at the same path must refresh the Dock too.
-        AppConfig.Current.Save();
-        ApplicationStatus.Text = "图标已更新，请保留原图片文件；可点击“恢复图标”使用应用原图标。";
+        var message = await DockApplicationIconEditor.ChooseImage(app, Window.GetWindow(this));
+        if (message is not null) ApplicationStatus.Text = message;
     }
 
     private void EditApplicationIcon(DockApplication app)
     {
         if (!CanEditLayout()) return;
-        var draft = app.IconStyle?.Copy() ?? new AvatarStyle();
-        var editor = new MagiDesk.Features.BrowserBadges.AvatarTextEditorWindow(app.Name, app.Name, draft, maxTextLength: 0)
-        { Owner = Window.GetWindow(this) };
-        if (editor.ShowDialog() != true || !CanEditLayout() || !AppConfig.Current.DockApplications.Contains(app)) return;
-        app.IconStyle = editor.WasReset ? null : draft;
-        app.IconPath = null;
-        AppConfig.Current.Save();
+        DockApplicationIconEditor.EditText(app, Window.GetWindow(this));
     }
 }

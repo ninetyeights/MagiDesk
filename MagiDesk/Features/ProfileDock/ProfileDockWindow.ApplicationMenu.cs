@@ -22,6 +22,20 @@ public partial class ProfileDockWindow
             open.Click += async (_, _) =>
                 await RunApplicationMenuActionAsync(() => Task.Run(() => DockApplicationRuntime.Launch(app)));
             menu.Items.Add(open);
+            var edit = new MenuItem { Header = item.RunningOnly ? "编辑图标（固定后可用）" : "编辑图标" };
+            DockLayoutLock.Protect(menu, edit, available: !item.RunningOnly, refreshOnOpen: false);
+            var textIcon = new MenuItem { Header = "自定义文字图标…" };
+            textIcon.Click += (_, _) => DockApplicationIconEditor.EditText(app, null);
+            var imageIcon = new MenuItem { Header = "选择图标图片…" };
+            imageIcon.Click += async (_, _) => await RunApplicationMenuActionAsync(async () =>
+            {
+                var message = await DockApplicationIconEditor.ChooseImage(app, null);
+                if (message is not null) MessageBox.Show(message, "应用图标", MessageBoxButton.OK, MessageBoxImage.Information);
+            });
+            var resetIcon = new MenuItem { Header = "恢复图标" };
+            resetIcon.Click += (_, _) => DockApplicationIconEditor.Reset(app);
+            edit.Items.Add(textIcon); edit.Items.Add(imageIcon); edit.Items.Add(resetIcon);
+            menu.Items.Add(edit);
             menu.Items.Add(new Separator());
 
             AddGroupMenu(menu, item.Key, item.RunningOnly ? app : null, includeRemove: false, refreshOnOpen: false);

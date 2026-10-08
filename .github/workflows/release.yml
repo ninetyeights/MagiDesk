@@ -73,7 +73,13 @@ jobs:
         run: |
           $files = @(Get-ChildItem release-assets -File | ForEach-Object FullName)
           if ($files.Count -ne 8) { throw 'Expected two installers, two ZIPs and four checksum files.' }
-          $arguments = @('release','create',$env:RELEASE_TAG,'--verify-tag','--draft','--title',"MagiDesk $env:RELEASE_TAG",'--notes-file','docs/RELEASE-NOTES.md')
+          $version = $env:RELEASE_TAG.Substring(1)
+          $changelog = Get-Content CHANGELOG.md -Raw
+          $section = [regex]::Match($changelog, '(?ms)^## ' + [regex]::Escape($version) + '\r?\n(.*?)(?=^## |\z)')
+          if (-not $section.Success -or -not $section.Groups[1].Value.Trim()) { throw 'Missing release changelog section.' }
+          $notes = Join-Path $env:RUNNER_TEMP 'release-notes.md'
+          $section.Groups[1].Value.Trim() | Set-Content $notes -Encoding utf8
+          $arguments = @('release','create',$env:RELEASE_TAG,'--verify-tag','--draft','--title',"MagiDesk $env:RELEASE_TAG",'--notes-file',$notes)
           if ($env:RELEASE_TAG.Contains('-')) { $arguments += '--prerelease' }
           & gh @arguments @files
           if ($LASTEXITCODE -ne 0) { throw 'Draft release creation failed; existing releases are never overwritten.' }
