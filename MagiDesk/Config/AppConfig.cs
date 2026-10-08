@@ -121,7 +121,7 @@ public sealed class AppConfig
     /// strip pinned to the top edge that reserves screen space). See
     /// <see cref="DockMode"/>.</summary>
     public DockMode BrowserDockMode     { get; set; } = DockMode.Floating;
-    public int DockFloatingEdge { get; set; } = 2; // 0 free, 1 top, 2 bottom
+    public int DockFloatingEdge { get; set; } = 1; // 0 free, 1 top, 2 bottom
     public int DockFloatingAlignment { get; set; } = 1; // left, center, right
     public int DockFloatingGap { get; set; } = 8; // DIPs
     public bool DockFloatingPositionLocked { get; set; }
