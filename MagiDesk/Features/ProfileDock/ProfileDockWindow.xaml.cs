@@ -668,10 +668,43 @@ public partial class ProfileDockWindow : Window
             label.SetResourceReference(TextBlock.ForegroundProperty, "DockTextBrush");
             stack.Children.Add(label);
             stack.Children.Add(row);
-            return ThemedGroupBox(stack);
+            return DropTarget(ThemedGroupBox(stack));
         }
-        if (separator == DockGroupSeparator.Bordered) return ThemedGroupBox(row);
-        return row;
+        if (separator == DockGroupSeparator.Bordered) return DropTarget(ThemedGroupBox(row));
+        return DropTarget(row);
+
+        FrameworkElement DropTarget(FrameworkElement element)
+        {
+            if (members.All(i => i.RunningOnly)) return element;
+            string targetKey = members[0].Key;
+            element.AllowDrop = true;
+            element.Unloaded += (_, _) => HideRunningDropHint();
+            if (element is Panel panel) panel.Background = Brushes.Transparent;
+            // Tunnel before child buttons: their bubbling handlers may otherwise accept the drop.
+            element.PreviewDragEnter += (_, e) => UpdateRunningDropHint(element, targetKey, e);
+            element.PreviewDragOver += (_, e) => UpdateRunningDropHint(element, targetKey, e);
+            element.PreviewDrop += (_, e) =>
+            {
+                UpdateRunningDropHint(element, targetKey, e);
+                HideRunningDropHint();
+            };
+            element.DragLeave += (_, _) => HideRunningDropHint();
+            element.DragOver += (_, e) =>
+            {
+                if (e.Data.GetData("MagiDesk.DockRunningItem") is not string key) return;
+                e.Effects = App.ProfileDock?.CanPinRunningItem(key, targetKey) == true ? DragDropEffects.Move : DragDropEffects.None;
+                UpdateRunningDropHint(element, targetKey, e);
+                e.Handled = true;
+            };
+            element.Drop += (_, e) =>
+            {
+                HideRunningDropHint();
+                if (e.Data.GetData("MagiDesk.DockRunningItem") is not string key) return;
+                App.ProfileDock?.PinRunningItem(key, targetKey, after: true, append: true);
+                e.Handled = true;
+            };
+            return element;
+        }
     }
 
     /// <summary>Rounded, tinted container used by the Label / Bordered group
@@ -765,7 +798,7 @@ public partial class ProfileDockWindow : Window
 
         var button = BuildItemButton(new DockItem(p) { RunningOnly = runningOnly }, host, size,
             $"{p.Name} · {p.Browser.DisplayName}", BuildProfileContextMenu(p, s));
-        AttachDragDrop(button, p.Key);
+        AttachDragDrop(button, p.Key, runningOnly);
         return button;
     }
 
@@ -895,7 +928,7 @@ public partial class ProfileDockWindow : Window
                 fallback.Visibility = Visibility.Collapsed;
             }, pixelSize: (int)Math.Ceiling(size * Math.Max(dpi.DpiScaleX, dpi.DpiScaleY)));
         }
-        if (!item.RunningOnly) AttachDragDrop(button, item.Key);
+        AttachDragDrop(button, item.Key, item.RunningOnly);
         return button;
     }
 
@@ -905,8 +938,46 @@ public partial class ProfileDockWindow : Window
     /// (cursor X relative to the target button's center) decides
     /// before/after; cross-group drops move the profile into the target's
     /// group at the drop position.</summary>
-    private void AttachDragDrop(Button btn, string sourceDir)
+    private ToolTip? _invalidDropHint;
+    private bool _invalidDropActive;
+
+    private void UpdateRunningDropHint(FrameworkElement target, string targetKey, DragEventArgs e)
     {
+        bool ungrouped = !DockCollections.Groups(AppConfig.Current).Any(g =>
+            g.ProfileDirs.Contains(targetKey, StringComparer.OrdinalIgnoreCase));
+        bool show = ungrouped && (e.Data.GetDataPresent("MagiDesk.DockRunningItem") ||
+            e.Data.GetDataPresent(DockGroups.DragFormat));
+        if (!show) { HideRunningDropHint(); return; }
+        e.Effects = DragDropEffects.None;
+        e.Handled = true;
+        if (!_invalidDropActive)
+        {
+            _invalidDropActive = true;
+            DiagnosticLog.Write("DOCK-DROP blocked=ungrouped target=" + target.GetType().Name);
+        }
+        _invalidDropHint ??= new ToolTip
+        {
+            Content = "⊘  只能拖动到分组中",
+            Placement = System.Windows.Controls.Primitives.PlacementMode.Top,
+            IsHitTestVisible = false,
+            StaysOpen = true,
+            FontWeight = FontWeights.SemiBold,
+            Padding = new Thickness(12, 8, 12, 8),
+        };
+        _invalidDropHint.PlacementTarget = target;
+        _invalidDropHint.IsOpen = true;
+    }
+
+    private void HideRunningDropHint()
+    {
+        if (_invalidDropHint is not null) _invalidDropHint.IsOpen = false;
+        if (_invalidDropActive) DiagnosticLog.Write("DOCK-DROP blocked=none");
+        _invalidDropActive = false;
+    }
+
+    private void AttachDragDrop(Button btn, string sourceDir, bool runningOnly = false)
+    {
+        string dragFormat = runningOnly ? "MagiDesk.DockRunningItem" : DockGroups.DragFormat;
         Point? dragOrigin = null;
         btn.PreviewMouseLeftButtonDown += (_, e) =>
         {
@@ -927,26 +998,49 @@ public partial class ProfileDockWindow : Window
                 Math.Abs(pos.Y - dragOrigin.Value.Y) < SystemParameters.MinimumVerticalDragDistance) return;
             dragOrigin = null;
             HoldFloating(true);
-            try { DragDrop.DoDragDrop(btn, new DataObject(DockGroups.DragFormat, sourceDir), DragDropEffects.Move); }
-            finally { HoldFloating(false); }
+            try { DragDrop.DoDragDrop(btn, new DataObject(dragFormat, sourceDir), DragDropEffects.Move); }
+            finally { HideRunningDropHint(); HoldFloating(false); }
         };
         btn.PreviewMouseLeftButtonUp += (_, _) => dragOrigin = null;
+        btn.GiveFeedback += (_, e) =>
+        {
+            e.UseDefaultCursors = e.Effects != DragDropEffects.None;
+            if (!e.UseDefaultCursors) Mouse.SetCursor(Cursors.No);
+            e.Handled = true;
+        };
 
+        btn.DragLeave += (_, _) => HideRunningDropHint();
         btn.DragOver += (_, e) =>
         {
-            e.Effects = e.Data.GetDataPresent(DockGroups.DragFormat) && !AppConfig.Current.BrowserDockLocked
+            if (!runningOnly && e.Data.GetData("MagiDesk.DockRunningItem") is string runningKey)
+            {
+                e.Effects = App.ProfileDock?.CanPinRunningItem(runningKey, sourceDir) == true ? DragDropEffects.Move : DragDropEffects.None;
+                UpdateRunningDropHint(btn, sourceDir, e);
+                e.Handled = true;
+                return;
+            }
+            HideRunningDropHint();
+            e.Effects = e.Data.GetDataPresent(dragFormat) && !AppConfig.Current.BrowserDockLocked
                       ? DragDropEffects.Move : DragDropEffects.None;
             e.Handled = true;
         };
         btn.Drop += (_, e) =>
         {
+            HideRunningDropHint();
             if (AppConfig.Current.BrowserDockLocked) return;
-            if (!e.Data.GetDataPresent(DockGroups.DragFormat)) return;
-            var src = (string?)e.Data.GetData(DockGroups.DragFormat);
+            if (!runningOnly && e.Data.GetData("MagiDesk.DockRunningItem") is string runningKey)
+            {
+                App.ProfileDock?.PinRunningItem(runningKey, sourceDir, e.GetPosition(btn).X > btn.ActualWidth / 2);
+                e.Handled = true;
+                return;
+            }
+            if (!e.Data.GetDataPresent(dragFormat)) return;
+            var src = (string?)e.Data.GetData(dragFormat);
             if (string.IsNullOrEmpty(src) || string.Equals(src, sourceDir, StringComparison.OrdinalIgnoreCase)) return;
             var dropPos = e.GetPosition(btn);
             bool insertAfter = dropPos.X > btn.ActualWidth / 2;
-            ReorderProfile(src, sourceDir, insertAfter);
+            if (runningOnly) App.ProfileDock?.ReorderRunningItem(src, sourceDir, insertAfter);
+            else ReorderProfile(src, sourceDir, insertAfter);
             e.Handled = true;
         };
     }
@@ -1031,7 +1125,7 @@ public partial class ProfileDockWindow : Window
         var currentGroup = groups.FirstOrDefault(g =>
             g.ProfileDirs.Contains(key, StringComparer.OrdinalIgnoreCase));
         // Lock protects explicit content edits as well as drag sorting.
-        var moveTo = new MenuItem { Header = runningApplication is null ? "移动到栏目" : "固定到栏目" };
+        var moveTo = new MenuItem { Header = runningApplication is null ? "移动到分组" : "固定到分组" };
         bool resolved = runningApplication?.UnresolvedWindowHandle is null;
         if (!resolved) moveTo.Header = "实例未识别，暂不能固定";
         DockLayoutLock.Protect(menu, moveTo, available: resolved, refreshOnOpen: refreshOnOpen);
@@ -1054,10 +1148,10 @@ public partial class ProfileDockWindow : Window
             moveTo.Items.Add(item);
         }
         if (groups.Count > 0) moveTo.Items.Add(new Separator());
-        var newGroup = new MenuItem { Header = "新建栏目..." };
+        var newGroup = new MenuItem { Header = "新建分组..." };
         newGroup.Click += (_, _) =>
         {
-            var name = PromptForText("新建栏目", "栏目名称：", string.Empty);
+            var name = PromptForText("新建分组", "分组名称：", string.Empty);
             if (string.IsNullOrWhiteSpace(name)) return;
             var grp = new BrowserDockGroup { Name = name.Trim() };
             groups.Add(grp);
@@ -1090,7 +1184,7 @@ public partial class ProfileDockWindow : Window
     }
 
     /// <summary>Tiny inline modal: TextBox + OK/Cancel. Returns null on cancel
-    /// or empty input. Used for "新建栏目" — too small to justify its own
+    /// or empty input. Used for "新建分组" — too small to justify its own
     /// xaml file, and avoids pulling in Microsoft.VisualBasic.</summary>
     private static string? PromptForText(string title, string prompt, string defaultValue)
     {

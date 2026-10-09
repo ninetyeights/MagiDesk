@@ -15,17 +15,15 @@ internal static class DockLayoutLock
 
     internal static void AddControls(ContextMenu menu, bool refreshOnOpen = true)
     {
-        var status = new MenuItem { IsEnabled = false };
-        var toggle = new MenuItem();
-        void Refresh()
+        var toggle = new MenuItem { Header = "锁定内容布局", IsCheckable = true };
+        void Refresh() => toggle.IsChecked = IsLocked;
+        toggle.Click += (_, _) =>
         {
-            status.Header = IsLocked ? "内容布局已锁定" : "内容布局可编辑";
-            toggle.Header = IsLocked ? "解锁并编辑…" : "锁定内容布局";
-        }
-        toggle.Click += (_, _) => Toggle();
+            Toggle();
+            Refresh();
+        };
         if (refreshOnOpen) menu.Opened += (_, _) => Refresh();
         Refresh();
-        menu.Items.Add(status);
         menu.Items.Add(toggle);
         menu.Items.Add(new Separator());
     }

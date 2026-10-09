@@ -16,7 +16,6 @@ public partial class DockProjectManager
 
     private void ShowTargetPicker(FrameworkElement anchor, string[] keys, bool remove)
     {
-        if (!CanEditLayout()) return;
         if (keys.Length == 0) return;
         if (_targetPopup is not null) _targetPopup.IsOpen = false;
         var popup = new System.Windows.Controls.Primitives.Popup
@@ -35,8 +34,7 @@ public partial class DockProjectManager
         picker.PreviewKeyDown += (_, e) => { if (e.Key == System.Windows.Input.Key.Escape) { popup.IsOpen = false; e.Handled = true; } };
         picker.Confirmed += target =>
         {
-            if (!CanEditLayout()) { popup.IsOpen = false; return; }
-            int count = DockProjectMembership.Apply(Config, target, keys, remove);
+            int count = DockProjectMembership.Apply(Config, target, keys, remove, respectLayoutLock: false);
             popup.IsOpen = false;
             Config.Save(); RefreshContent();
             ApplicationStatus.Text = remove ? $"已从「{target.Label}」移除 {count} 项。" : $"已添加 {count} 项到「{target.Label}」，勾选已保留。";
@@ -55,10 +53,9 @@ public partial class DockProjectManager
 
     private void RemoveRowMembership_Click(object sender, RoutedEventArgs e)
     {
-        if (!CanEditLayout()) return;
         if (sender is DockMembershipStrip { DataContext: ProjectRow row, RequestedTarget: { } target })
         {
-            DockProjectMembership.Apply(Config, target, new[] { row.Key }, remove: true);
+            DockProjectMembership.Apply(Config, target, new[] { row.Key }, remove: true, respectLayoutLock: false);
             Config.Save(); RefreshContent();
         }
         e.Handled = true;
@@ -72,20 +69,18 @@ public partial class DockProjectManager
         {
             var entry = new MenuItem { Header = target.Label };
             var remove = new MenuItem { Header = "移除此归属" };
-            DockLayoutLock.Protect(menu, remove);
             remove.Click += (_, _) =>
             {
-                DockProjectMembership.Apply(Config, target, new[] { row.Key }, remove: true);
+                DockProjectMembership.Apply(Config, target, new[] { row.Key }, remove: true, respectLayoutLock: false);
                 Config.Save(); RefreshContent();
             };
             entry.Items.Add(remove);
             foreach (var column in target.Collection.Segments.Where(c => c != target.Column))
             {
-                var move = new MenuItem { Header = $"移到栏目：{column.Name}" };
-                DockLayoutLock.Protect(menu, move);
+                var move = new MenuItem { Header = $"移到分组：{column.Name}" };
                 move.Click += (_, _) =>
                 {
-                    DockProjectMembership.Apply(Config, new(target.Collection, column), new[] { row.Key }, remove: false);
+                    DockProjectMembership.Apply(Config, new(target.Collection, column), new[] { row.Key }, remove: false, respectLayoutLock: false);
                     Config.Save(); RefreshContent();
                 };
                 entry.Items.Add(move);
@@ -98,7 +93,6 @@ public partial class DockProjectManager
 
     private void DeleteLibraryApplications_Click(object sender, RoutedEventArgs e)
     {
-        if (!CanEditLayout()) return;
         var applications = Config.DockApplications.Where(a => _librarySelection.Contains(DockItem.ApplicationKey(a.Id))).ToList();
         if (applications.Count == 0)
         {
@@ -106,7 +100,7 @@ public partial class DockProjectManager
             return;
         }
         if (!Confirm($"从项目库和所有集合移除勾选的 {applications.Count} 个应用？不会卸载或关闭应用，浏览器账号不受影响。")) return;
-        foreach (var app in applications) DockGroups.RemoveApplication(Config, app.Id);
+        foreach (var app in applications) DockGroups.RemoveApplication(Config, app.Id, respectLayoutLock: false);
         Config.Save();
         RefreshContent();
         ApplicationStatus.Text = $"已移除 {applications.Count} 个应用。";

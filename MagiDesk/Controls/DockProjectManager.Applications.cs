@@ -11,7 +11,7 @@ public partial class DockProjectManager
 
     private async void DiscoverEmulators_Click(object sender, RoutedEventArgs e)
     {
-        if (_importingApplications || !CanEditLayout()) return;
+        if (_importingApplications) return;
         _importingApplications = true;
         ApplicationStatus.Text = "正在识别 BlueStacks / MSI App Player 实例…";
         try
@@ -22,7 +22,6 @@ public partial class DockProjectManager
                 DockApplicationRuntime.RefreshShortcutInstances(existing);
                 return EmulatorInstanceDiscovery.Discover();
             });
-            if (!CanEditLayout()) return;
             int added = 0;
             foreach (var app in result.Applications)
                 if (EmulatorInstanceDiscovery.Add(Config.DockApplications, app)) added++;
@@ -35,7 +34,7 @@ public partial class DockProjectManager
             }
             ApplicationStatus.Text = result.Applications.Count == 0
                 ? "未发现实例。支持已安装的 BlueStacks 5 / MSI App Player 5，请先在模拟器中创建实例。"
-                : $"发现 {result.Applications.Count} 个实例，新增 {added} 个，跳过 {result.Applications.Count - added} 个已有实例。勾选后可加入栏目。";
+                : $"发现 {result.Applications.Count} 个实例，新增 {added} 个，跳过 {result.Applications.Count - added} 个已有实例。勾选后可加入分组。";
             if (result.Errors.Count > 0) ApplicationStatus.Text += "\n" + string.Join("\n", result.Errors.Distinct());
         }
         catch (Exception ex)
@@ -48,7 +47,6 @@ public partial class DockProjectManager
 
     private async void AddApplication_Click(object sender, RoutedEventArgs e)
     {
-        if (!CanEditLayout()) return;
         var dialog = new Microsoft.Win32.OpenFileDialog
         {
             Title = "添加 Dock 应用", Filter = "应用或快捷方式|*.exe;*.lnk", Multiselect = true,
@@ -58,7 +56,7 @@ public partial class DockProjectManager
 
     private void Applications_DragOver(object sender, DragEventArgs e)
     {
-        e.Effects = !Config.BrowserDockLocked && !_importingApplications && e.Data.GetData(DataFormats.FileDrop) is string[] paths &&
+        e.Effects = !_importingApplications && e.Data.GetData(DataFormats.FileDrop) is string[] paths &&
             paths.Length > 0 && paths.All(DockApplicationRuntime.IsSupportedPath)
             ? DragDropEffects.Copy : DragDropEffects.None;
         e.Handled = true;
@@ -72,7 +70,7 @@ public partial class DockProjectManager
 
     private async Task AddApplications(string[] paths)
     {
-        if (_importingApplications || !CanEditLayout()) return;
+        if (_importingApplications) return;
         _importingApplications = true;
         ApplicationStatus.Text = "正在读取应用…";
         try
@@ -92,7 +90,6 @@ public partial class DockProjectManager
                 }
                 return (entries, errors);
             });
-            if (!CanEditLayout()) return;
             int added = 0;
             var addedKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var app in result.entries)
@@ -117,14 +114,14 @@ public partial class DockProjectManager
 
     private async void ChangeApplicationIcon(DockApplication app)
     {
-        if (!CanEditLayout()) return;
-        var message = await DockApplicationIconEditor.ChooseImage(app, Window.GetWindow(this));
+
+        var message = await DockApplicationIconEditor.ChooseImage(app, Window.GetWindow(this), respectLayoutLock: false);
         if (message is not null) ApplicationStatus.Text = message;
     }
 
     private void EditApplicationIcon(DockApplication app)
     {
-        if (!CanEditLayout()) return;
-        DockApplicationIconEditor.EditText(app, Window.GetWindow(this));
+
+        DockApplicationIconEditor.EditText(app, Window.GetWindow(this), respectLayoutLock: false);
     }
 }

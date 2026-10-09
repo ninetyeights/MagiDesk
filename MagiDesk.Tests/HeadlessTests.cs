@@ -829,6 +829,14 @@ internal static class HeadlessTests
                 Check(result.Count == 2, "multiple windows share one application entry");
                 var reversed = DockRunningItems.Build(new[] { b, a2, a }, Array.Empty<DockApplication>(), none, Array.Empty<ChromeProfile>(), visible, result);
                 Check(result.Select(i => i.Key).SequenceEqual(reversed.Select(i => i.Key)), "foreground changes never reorder entries");
+                string firstKey = result[0].Key, secondKey = result[1].Key;
+                Check(DockRunningItems.Reorder(result, firstKey, secondKey, true) && result[0].Key == secondKey,
+                    "running app can move after its neighbour");
+                var refreshed = DockRunningItems.Build(new[] { a, b }, Array.Empty<DockApplication>(), none, Array.Empty<ChromeProfile>(), visible, result);
+                Check(refreshed[0].Key == secondKey, "manual running order survives refresh");
+                Check(!DockRunningItems.Reorder(result, "missing", firstKey, false), "closed drag source ignored");
+                Check(DockRunningItems.Reorder(result, firstKey, secondKey, false) && result[0].Key == firstKey,
+                    "running app can move before its neighbour");
                 var closed = DockRunningItems.Build(new[] { b }, Array.Empty<DockApplication>(), none, Array.Empty<ChromeProfile>(), visible, result);
                 Check(closed.Count == 1 && closed[0].Key == result[1].Key, "closed app removed without moving surviving entries");
                 Check(DockRunningItems.Build(Array.Empty<DockApplicationRuntime.Window>(), pins, none, Array.Empty<ChromeProfile>(), visible, result).Count == 0,

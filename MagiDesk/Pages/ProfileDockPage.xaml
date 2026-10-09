@@ -60,7 +60,7 @@
                                          Checked="RunningApplications_Changed" Unchecked="RunningApplications_Changed"/>
                         <StackPanel Margin="0,0,16,0">
                             <TextBlock Text="显示正在运行的应用" FontWeight="SemiBold"/>
-                            <TextBlock Text="未固定的已打开应用显示在末尾；已固定或已显示在浏览器栏目中的项目保持原位置，不重复显示。"
+                            <TextBlock Text="未固定的已打开应用显示在末尾；已固定或已显示在浏览器分组中的项目保持原位置，不重复显示。"
                                        TextWrapping="Wrap" FontSize="12" Margin="0,4,0,0"
                                        Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
                         </StackPanel>
@@ -237,12 +237,12 @@
 
                 <ui:Card HorizontalAlignment="Stretch" Padding="18,16" Margin="0,0,0,12">
                     <StackPanel>
-                        <TextBlock Text="栏目样式" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                        <TextBlock Text="分组样式" FontWeight="SemiBold" Margin="0,0,0,8"/>
                         <ComboBox x:Name="CmbSeparator" SelectionChanged="Separator_Changed">
                             <ComboBoxItem Content="空隙"/><ComboBoxItem Content="竖线"/>
-                            <ComboBoxItem Content="栏目名称"/><ComboBoxItem Content="半透边框"/>
+                            <ComboBoxItem Content="分组名称"/><ComboBoxItem Content="半透边框"/>
                         </ComboBox>
-                        <TextBlock Text="在左侧「Dock → 内容管理」中管理浏览器账号、应用、集合和栏目。"
+                        <TextBlock Text="在左侧「Dock → 内容管理」中管理浏览器账号、应用、集合和分组。"
                                    TextWrapping="Wrap" Margin="0,8,0,0" Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
                     </StackPanel>
                 </ui:Card>

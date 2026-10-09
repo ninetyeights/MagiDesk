@@ -48,21 +48,23 @@ internal static class DockGroups
         return result;
     }
 
-    internal static void Detach(AppConfig cfg, string key)
+    internal static void Detach(AppConfig cfg, string key, bool respectLayoutLock = true)
     {
-        if (cfg.BrowserDockLocked) return;
+        if (respectLayoutLock && cfg.BrowserDockLocked) return;
         foreach (var group in DockCollections.Groups(cfg)) group.ProfileDirs.RemoveAll(k => Same(k, key));
         DockCollections.UngroupedOrder(cfg).RemoveAll(k => Same(k, key));
         // Empty named groups remain valid destinations in settings.
     }
 
-    internal static bool PinRunningApplication(AppConfig cfg, DockApplication running, BrowserDockGroup target)
+    internal static bool PinRunningApplication(AppConfig cfg, DockApplication running, BrowserDockGroup target,
+        string? neighbor = null, bool after = false)
     {
         if (cfg.BrowserDockLocked || running.UnresolvedWindowHandle is not null ||
             (DockApplicationRuntime.IsInstancePlayer(running.ExecutablePath) && string.IsNullOrEmpty(running.InstanceName))) return false;
         // Validate the destination before importing; a stale menu must not create orphan entries.
         if (!DockCollections.Groups(cfg).Contains(target) ||
-            !DockApplicationRuntime.IsSupportedPath(running.ExecutablePath)) return false;
+            !DockApplicationRuntime.IsSupportedPath(running.ExecutablePath) ||
+            (neighbor is not null && !target.ProfileDirs.Any(k => Same(k, neighbor)))) return false;
         var app = cfg.DockApplications.FirstOrDefault(a =>
             DockApplicationRuntime.SameApplicationExecutable(a.ExecutablePath, running.ExecutablePath) &&
             string.Equals(DockApplicationRuntime.ResolvedInstance(a), running.InstanceName, StringComparison.OrdinalIgnoreCase));
@@ -75,7 +77,7 @@ internal static class DockGroups
             };
             cfg.DockApplications.Add(app);
         }
-        return MoveInto(cfg, DockItem.ApplicationKey(app.Id), target);
+        return MoveInto(cfg, DockItem.ApplicationKey(app.Id), target, neighbor, after);
     }
 
     internal static bool MoveInto(AppConfig cfg, string key, BrowserDockGroup target,
@@ -118,11 +120,11 @@ internal static class DockGroups
         return true;
     }
 
-    internal static void RemoveApplication(AppConfig cfg, string id)
+    internal static void RemoveApplication(AppConfig cfg, string id, bool respectLayoutLock = true)
     {
-        if (cfg.BrowserDockLocked) return;
+        if (respectLayoutLock && cfg.BrowserDockLocked) return;
         cfg.DockApplications.RemoveAll(a => Same(a.Id, id));
-        Detach(cfg, DockItem.ApplicationKey(id));
+        Detach(cfg, DockItem.ApplicationKey(id), respectLayoutLock);
         foreach (var collection in DockCollections.All(cfg)) DockCollections.RemoveItems(collection, new[] { DockItem.ApplicationKey(id) });
     }
 }

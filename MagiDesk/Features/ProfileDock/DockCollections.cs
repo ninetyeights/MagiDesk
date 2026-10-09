@@ -63,9 +63,9 @@ internal static class DockCollections
         return collection;
     }
 
-    internal static bool ReorderCollection(AppConfig cfg, DockCollection source, DockCollection target, bool after)
+    internal static bool ReorderCollection(AppConfig cfg, DockCollection source, DockCollection target, bool after, bool respectLayoutLock = true)
     {
-        if (cfg.BrowserDockLocked) return false;
+        if (respectLayoutLock && cfg.BrowserDockLocked) return false;
         var ordered = All(cfg).ToList();
         if (source == target || !ordered.Contains(source) || !ordered.Contains(target)) return false;
         ordered.Remove(source);
@@ -80,9 +80,9 @@ internal static class DockCollections
         return true;
     }
 
-    internal static bool DeleteCollection(AppConfig cfg, DockCollection collection)
+    internal static bool DeleteCollection(AppConfig cfg, DockCollection collection, bool respectLayoutLock = true)
     {
-        if (cfg.BrowserDockLocked) return false;
+        if (respectLayoutLock && cfg.BrowserDockLocked) return false;
         if (All(cfg).Count() <= 1) return false;
         var owner = cfg.DockNavigationGroups.FirstOrDefault(g => g.Collections.Contains(collection));
         if (owner is null) return false;
@@ -97,9 +97,9 @@ internal static class DockCollections
         return group.Collections.Count == 0 && cfg.DockNavigationGroups.Remove(group);
     }
 
-    internal static int AddItems(AppConfig cfg, DockCollection collection, BrowserDockGroup segment, IEnumerable<string> keys)
+    internal static int AddItems(AppConfig cfg, DockCollection collection, BrowserDockGroup segment, IEnumerable<string> keys, bool respectLayoutLock = true)
     {
-        if (cfg.BrowserDockLocked) return 0;
+        if (respectLayoutLock && cfg.BrowserDockLocked) return 0;
         if (!All(cfg).Contains(collection) || !collection.Segments.Contains(segment)) return 0;
         var validApps = cfg.DockApplications.Select(a => DockItem.ApplicationKey(a.Id)).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var incoming = keys.Where(k => !string.IsNullOrWhiteSpace(k) &&

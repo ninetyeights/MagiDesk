@@ -34,6 +34,13 @@ internal static class DockCollectionTests
             "locked contents remain visible");
         Check(DockCollections.Activate(cfg, second), "switching existing collection remains allowed");
         Check(DockCollections.Activate(cfg, first), "switch back while locked");
+        Check(DockProjectMembership.Apply(cfg, new(first, column), new[] { "browser:profile" }, false, respectLayoutLock: false) == 1,
+            "management can add while dock is locked");
+        Check(DockProjectMembership.Apply(cfg, new(first, column), new[] { "browser:profile" }, true, respectLayoutLock: false) == 1,
+            "management can remove while dock is locked");
+        Check(DockCollections.ReorderCollection(cfg, first, second, true, respectLayoutLock: false),
+            "management can reorder collections while dock is locked");
+        Check(cfg.BrowserDockLocked, "management edits preserve dock lock");
         cfg.BrowserDockLocked = false;
         Check(DockProjectMembership.Apply(cfg, new(first, column), new[] { key }, true) == 1, "unlock restores edits");
     }
@@ -70,6 +77,14 @@ internal static class DockCollectionTests
         player.InstanceName = "Pie64_1";
         Check(DockGroups.PinRunningApplication(cfg, player, column) && cfg.DockApplications.Count == 3 &&
             cfg.DockApplications.Last().InstanceName == "Pie64_1", "different player instances remain distinct");
+        string neighbor = DockItem.ApplicationKey(shortcut.Id);
+        Check(!DockGroups.PinRunningApplication(cfg, running, column, "missing") && other.ProfileDirs.Count == 1,
+            "stale drop neighbour leaves existing membership intact");
+        Check(DockGroups.PinRunningApplication(cfg, running, column, neighbor, false) &&
+            column.ProfileDirs[0] == DockItem.ApplicationKey(saved.Id), "drop before column item inserts at cursor position");
+        Check(DockGroups.PinRunningApplication(cfg, running, column, neighbor, true) &&
+            column.ProfileDirs[1] == DockItem.ApplicationKey(saved.Id) && cfg.DockApplications.Count == 3,
+            "drop after column item reuses application without duplicates");
     }
 
     private static void Check(bool condition, string message)

@@ -7,6 +7,20 @@ namespace MagiDesk.Features.ProfileDock;
 /// <summary>Pure projection: running entries are transient and never written into pinned configuration.</summary>
 internal static class DockRunningItems
 {
+    internal static bool Reorder(List<DockItem> items, string sourceKey, string targetKey, bool insertAfter)
+    {
+        int source = items.FindIndex(i => string.Equals(i.Key, sourceKey, StringComparison.OrdinalIgnoreCase));
+        int target = items.FindIndex(i => string.Equals(i.Key, targetKey, StringComparison.OrdinalIgnoreCase));
+        if (source < 0 || target < 0 || source == target) return false;
+        int destination = target + (insertAfter ? 1 : 0);
+        if (source < destination) destination--;
+        if (source == destination) return false;
+        var item = items[source];
+        items.RemoveAt(source);
+        items.Insert(destination, item);
+        return true;
+    }
+
     internal static List<DockItem> Build(IEnumerable<DockApplicationRuntime.Window> windows,
         IEnumerable<DockApplication> pinned, IReadOnlyDictionary<IntPtr, string> browserWindows,
         IEnumerable<ChromeProfile> profiles, ISet<string> visibleProfiles, IReadOnlyList<DockItem> previous)

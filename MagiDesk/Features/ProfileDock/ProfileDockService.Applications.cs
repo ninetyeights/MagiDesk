@@ -17,6 +17,40 @@ public sealed partial class ProfileDockService
 
     private Dictionary<IntPtr, string> BrowserWindowMap() => _browserWindowSnapshot;
 
+    internal bool CanPinRunningItem(string sourceKey, string targetKey)
+    {
+        if (AppConfig.Current.BrowserDockLocked) return false;
+        var item = _runningItems.FirstOrDefault(i => i.Key == sourceKey);
+        return item is not null && DockCollections.Groups(AppConfig.Current).Any(g =>
+            g.ProfileDirs.Contains(targetKey, StringComparer.OrdinalIgnoreCase)) &&
+            (item.Application is not { } app || (app.UnresolvedWindowHandle is null &&
+                DockApplicationRuntime.IsSupportedPath(app.ExecutablePath) &&
+                (!DockApplicationRuntime.IsInstancePlayer(app.ExecutablePath) || !string.IsNullOrEmpty(app.InstanceName))));
+    }
+
+    internal void PinRunningItem(string sourceKey, string targetKey, bool after, bool append = false)
+    {
+        if (!CanPinRunningItem(sourceKey, targetKey)) return;
+        var cfg = AppConfig.Current;
+        var item = _runningItems.First(i => i.Key == sourceKey);
+        var group = DockCollections.Groups(cfg).First(g => g.ProfileDirs.Contains(targetKey, StringComparer.OrdinalIgnoreCase));
+        string? neighbor = append ? null : targetKey;
+        bool changed = item.Application is { } app
+            ? DockGroups.PinRunningApplication(cfg, app, group, neighbor, after)
+            : DockGroups.MoveInto(cfg, item.Key, group, neighbor, after);
+        if (changed) cfg.Save();
+    }
+
+    internal void ReorderRunningItem(string sourceKey, string targetKey, bool insertAfter)
+    {
+        if (AppConfig.Current.BrowserDockLocked ||
+            !DockRunningItems.Reorder(_runningItems, sourceKey, targetKey, insertAfter)) return;
+        var cfg = AppConfig.Current;
+        var groups = BuildItems();
+        foreach (var window in _windows)
+            window.SetItems(groups, cfg.BrowserDockButtonSize, cfg.BrowserDockSeparator);
+    }
+
     private bool UpdateRunningItems()
     {
         var cfg = AppConfig.Current;

@@ -12,7 +12,7 @@ internal sealed class DockTargetPicker : UserControl
     private readonly string[] _keys;
     private readonly bool _remove;
     private readonly TreeView _tree = new() { BorderThickness = new Thickness(0), MinHeight = 100, MaxHeight = 280 };
-    private readonly Wpf.Ui.Controls.TextBox _search = new() { MinHeight = 32, Margin = new Thickness(0, 8, 0, 8), PlaceholderText = "搜索集合或栏目…" };
+    private readonly Wpf.Ui.Controls.TextBox _search = new() { MinHeight = 32, Margin = new Thickness(0, 8, 0, 8), PlaceholderText = "搜索集合或分组…" };
     private readonly TextBlock _target = new() { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 8, 0, 8) };
     private readonly Button _apply;
     private readonly Func<string, string, string?> _askName;
@@ -32,11 +32,11 @@ internal sealed class DockTargetPicker : UserControl
         {
             var actions = new WrapPanel();
             var createCollection = new Button { Content = "＋集合", Margin = new Thickness(0, 8, 8, 0) };
-            var createColumn = new Button { Content = "＋栏目", Margin = new Thickness(0, 8, 0, 0) };
+            var createColumn = new Button { Content = "＋分组", Margin = new Thickness(0, 8, 0, 0) };
             createCollection.Click += (_, _) =>
             {
                 var name = _askName("新建集合", "新集合");
-                if (name is null || config.BrowserDockLocked) return;
+                if (name is null) return;
                 var added = DockCollections.AddCollection(config, name);
                 var first = new BrowserDockGroup { Name = "常用" };
                 added.Segments.Add(first);
@@ -50,8 +50,8 @@ internal sealed class DockTargetPicker : UserControl
                     DockCollection c => c, DockProjectTarget t => t.Collection, _ => _selected?.Collection ?? collection
                 };
                 if (owner is null || !DockCollections.All(config).Contains(owner)) { _target.Text = "请先选择集合。"; return; }
-                var name = _askName("新建栏目", "常用");
-                if (name is null || config.BrowserDockLocked) return;
+                var name = _askName("新建分组", "常用");
+                if (name is null) return;
                 var added = new BrowserDockGroup { Name = name };
                 owner.Segments.Add(added); _selected = new(owner, added);
                 config.Save(); _search.Clear(); Rebuild();
@@ -61,11 +61,11 @@ internal sealed class DockTargetPicker : UserControl
         body.Children.Add(_target);
         if (!remove) body.Children.Add(new TextBlock
         {
-            Text = "同一集合内每项只属于一个栏目，选择其他栏目会移动过去；不同集合可分别引用。",
+            Text = "同一集合内每项只属于一个分组，选择其他分组会移动过去；不同集合可分别引用。",
             TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 8), FontSize = 12,
         });
         _apply = new Button { Content = remove ? "确认移除" : "确认添加", IsEnabled = false };
-        _apply.Click += (_, _) => { if (!_config.BrowserDockLocked && _selected is not null) Confirmed?.Invoke(_selected); };
+        _apply.Click += (_, _) => { if (_selected is not null) Confirmed?.Invoke(_selected); };
         body.Children.Add(_apply);
         var border = new Border { Padding = new Thickness(16), BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(8), Child = body, Width = 330 };
         border.SetResourceReference(Border.BackgroundProperty, "SolidBackgroundFillColorBaseBrush");
@@ -102,7 +102,7 @@ internal sealed class DockTargetPicker : UserControl
 
     private void UpdateTarget()
     {
-        _target.Text = _selected is null ? "请选择目标栏目。" : $"{(_remove ? "移除自" : "添加到")}：{_selected.Label}";
-        _apply.IsEnabled = !_config.BrowserDockLocked && _selected is not null;
+        _target.Text = _selected is null ? "请选择目标分组。" : $"{(_remove ? "移除自" : "添加到")}：{_selected.Label}";
+        _apply.IsEnabled = _selected is not null;
     }
 }
